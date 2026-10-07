@@ -224,7 +224,7 @@
   <header>
     <div>
       <h1>Calorie Tracker</h1>
-      <span class="badge">v1.9.1</span>
+      <span class="badge">v1.9.2</span>
     </div>
     <div class="header-actions">
       <button id="openAiModalBtn" class="btn-icon" title="Impostazioni Modelli AI">🤖 Modelli AI</button>
@@ -397,13 +397,15 @@
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js').then((registration) => {
+          registration.update();
+
           registration.addEventListener('updatefound', () => {
             const newWorker = registration.installing;
             if (newWorker) {
               newWorker.addEventListener('statechange', () => {
                 if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                  console.log('Nuova versione SW installata. Ricarico l\'app...');
-                  window.location.reload();
+                  console.log('Nuova versione SW rilevata. Attivazione...');
+                  newWorker.postMessage({ type: 'SKIP_WAITING' });
                 }
               });
             }

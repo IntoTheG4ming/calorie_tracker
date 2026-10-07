@@ -32,7 +32,8 @@ const FALLBACK_PROFILES = {
     heightCm: 173,
     weightKg: 71,
     activityLevel: "sedentary",
-    password: ""
+    password: "",
+    bioCred: ""
   }
 };
 
@@ -112,10 +113,26 @@ async function encryptData(dataObj, password, username) {
 }
 
 async function decryptData(cipherText, password, username) {
+  if (!cipherText) return [];
   try {
-    if (!cipherText) return [];
-    const parsed = typeof cipherText === 'string' ? JSON.parse(cipherText) : cipherText;
-    if (!parsed.cipher || !parsed.iv) return parsed; // Fallback se non cifrato
+    let parsed;
+    if (typeof cipherText === 'string') {
+      try {
+        parsed = JSON.parse(cipherText);
+      } catch (e) {
+        return [];
+      }
+    } else {
+      parsed = cipherText;
+    }
+
+    // Retrocompatibilità: se i dati non sono un oggetto cifrato (cipher + iv), restituiscili direttamente
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+    if (!parsed || !parsed.cipher || !parsed.iv) {
+      return parsed || [];
+    }
 
     const key = await deriveCryptoKey(password, username);
     const decrypted = await window.crypto.subtle.decrypt(
@@ -126,7 +143,7 @@ async function decryptData(cipherText, password, username) {
     const dec = new TextDecoder();
     return JSON.parse(dec.decode(decrypted));
   } catch (err) {
-    console.warn("Impossibile decifrare i dati:", err);
+    console.warn("Impossibile decifrare i dati (chiave errata o formato non valido):", err);
     return [];
   }
 }
@@ -143,7 +160,7 @@ function getUserSessionPassword(username) {
   const profiles = getProfiles();
   const profile = profiles[username];
   if (!profile || !profile.password) return "";
-  return sessionStorage.getItem(`pass_${username}`) || "";
+  return sessionStorage.getItem(`pass_${username}`) || profile.password || "";
 }
 
 function calculateMetricsFor(profile) {
@@ -155,7 +172,7 @@ function calculateMetricsFor(profile) {
   return { bmr: Math.round(bmr), tdee };
 }
 
-// --- SUPPORTO ED ESECUZIONE WEBAUTHN (BIOMETRIA PERMANENTE) ---
+// --- SUPPORTO ED ESECUZIONE WEBAUTHN (BIOMETRIA PERMANENTE + CLOUD SYNC) ---
 async function isBiometricSupported() {
   return window.PublicKeyCredential &&
          typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function' &&
@@ -196,6 +213,14 @@ async function registerBiometric(username) {
     if (credential) {
       const credIdBase64 = bufferToBase64(credential.rawId);
       localStorage.setItem(`bio_cred_${username.trim().toLowerCase()}`, credIdBase64);
+      
+      // Salva la credenziale anche nel profilo cloud
+      const profiles = getProfiles();
+      if (profiles[username]) {
+        profiles[username].bioCred = credIdBase64;
+        saveProfilesLocally(profiles);
+        saveProfilesToCloud(profiles);
+      }
       return true;
     }
   } catch (err) {
@@ -260,7 +285,7 @@ async function saveMeals(meals) {
   localStorage.setItem(getStoredMealsKey(), encryptedPayload);
 }
 
-// --- SINCRONIZZAZIONE PROFILI (CLOUD) ---
+// --- SINCRONIZZAZIONE PROFILI E BIOMETRIA (CLOUD) ---
 async function syncProfilesFromCloud() {
   if (!SHEETS_API_URL) return;
   try {
@@ -272,6 +297,15 @@ async function syncProfilesFromCloud() {
     const result = await res.json();
     if (result.status === "success" && result.data && Object.keys(result.data).length > 0) {
       saveProfilesLocally(result.data);
+      
+      // Ripristina automaticamente i token biometrici in localStorage se presenti nel cloud
+      Object.keys(result.data).forEach(uName => {
+        const p = result.data[uName];
+        if (p && p.bioCred) {
+          localStorage.setItem(`bio_cred_${uName.trim().toLowerCase()}`, p.bioCred);
+        }
+      });
+
       populateUserSelect();
       renderProfilesGrid();
     }
@@ -465,13 +499,11 @@ async function deleteProfile(targetUser) {
   delete profiles[targetUser];
   saveProfilesLocally(profiles);
 
-  // Rimuovi pasti e biometria locale
   localStorage.removeItem(`calorie_tracker_meals_${targetUser.trim().toLowerCase()}`);
   localStorage.removeItem(`bio_cred_${targetUser.trim().toLowerCase()}`);
   sessionStorage.removeItem(`unlocked_${targetUser}`);
   sessionStorage.removeItem(`pass_${targetUser}`);
 
-  // Invia richiesta di eliminazione al cloud
   if (SHEETS_API_URL) {
     try {
       await fetch(SHEETS_API_URL, {
@@ -485,7 +517,6 @@ async function deleteProfile(targetUser) {
     }
   }
 
-  // Aggiorna interfaccia
   const remainingUsers = Object.keys(profiles);
   if (remainingUsers.length > 0) {
     activeUser = remainingUsers[0];
@@ -682,6 +713,9 @@ async function requestUserSwitch(targetUser) {
   const profile = profiles[targetUser];
 
   if (!profile || !profile.password || sessionStorage.getItem(`unlocked_${targetUser}`)) {
+    if (profile && profile.password) {
+      sessionStorage.setItem(`pass_${targetUser}`, profile.password);
+    }
     switchUser(targetUser);
     return true;
   }
@@ -707,7 +741,7 @@ async function requestUserSwitch(targetUser) {
     const bioOk = await verifyBiometric(targetUser);
     if (bioOk) {
       sessionStorage.setItem(`unlocked_${targetUser}`, "true");
-      sessionStorage.setItem(`pass_${targetUser}`, profile.password);
+      sessionStorage.setItem(`pass_${targetUser}`, profile.password || "");
       document.getElementById('unlockModal').style.display = 'none';
       switchUser(targetUser);
       pendingUserSwitch = null;
@@ -885,7 +919,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       heightCm: Number(document.getElementById('profHeight').value) || 170,
       weightKg: Number(document.getElementById('profWeight').value) || 70,
       activityLevel: document.getElementById('profActivityLevel').value,
-      password: enteredPass
+      password: enteredPass,
+      bioCred: profiles[targetName]?.bioCred || ""
     };
 
     sessionStorage.setItem(`unlocked_${targetName}`, "true");
