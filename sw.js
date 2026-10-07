@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cal-tracker-v1.6.0';
+const CACHE_NAME = 'cal-tracker-v1.8.0';
 const ASSETS = [
   './',
   './index.html',
@@ -29,7 +29,6 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-  // Bypassa la cache per le API Gemini e Google Apps Script
   if (e.request.url.includes('generativelanguage.googleapis.com') ||
       e.request.url.includes('script.google.com')) {
     return;

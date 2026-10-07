@@ -7,7 +7,7 @@ function getApiKey() {
   return params.get('key') || HARDCODED_API_KEY;
 }
 
-// --- MAPPA LIVELLI ATTIVITÀ FISICA E STIMA AUTOMATICA MOLTIPLICATORE ---
+// --- MAPPA LIVELLI ATTIVITÀ FISICA ---
 const ACTIVITY_MULTIPLIERS = {
   sedentary: 1.2,
   light: 1.375,
@@ -22,7 +22,8 @@ const FALLBACK_PROFILES = {
     age: 20,
     heightCm: 173,
     weightKg: 71,
-    activityLevel: "sedentary"
+    activityLevel: "sedentary",
+    password: ""
   }
 };
 
@@ -36,6 +37,7 @@ function saveProfilesLocally(profiles) {
 }
 
 let activeUser = localStorage.getItem('cal_active_user') || "Emanuele";
+let pendingUserSwitch = null;
 
 function calculateMetricsFor(profile) {
   if (!profile) return { bmr: 1700, tdee: 2040 };
@@ -44,6 +46,91 @@ function calculateMetricsFor(profile) {
   const multiplier = ACTIVITY_MULTIPLIERS[profile.activityLevel] || 1.2;
   const tdee = Math.round(bmr * multiplier);
   return { bmr: Math.round(bmr), tdee };
+}
+
+// --- SUPPORTO ED ESECUZIONE WEBAUTHN (BIOMETRIA) ---
+async function isBiometricSupported() {
+  return window.PublicKeyCredential &&
+         typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function' &&
+         await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+}
+
+async function registerBiometric(username) {
+  if (!await isBiometricSupported()) {
+    alert("La biometria non è supportata su questo dispositivo o browser.");
+    return false;
+  }
+  try {
+    const challenge = new Uint8Array(32);
+    window.crypto.getRandomValues(challenge);
+    const userId = new TextEncoder().encode(username.toLowerCase());
+
+    const credential = await navigator.credentials.create({
+      publicKey: {
+        challenge: challenge,
+        rp: { name: "Calorie Tracker PWA" },
+        user: {
+          id: userId,
+          name: username,
+          displayName: username
+        },
+        pubKeyCredParams: [
+          { alg: -7, type: "public-key" },  // ES256
+          { alg: -257, type: "public-key" } // RS256
+        ],
+        authenticatorSelection: {
+          authenticatorAttachment: "platform",
+          userVerification: "required"
+        },
+        timeout: 60000
+      }
+    });
+
+    if (credential) {
+      const rawId = btoa(String.fromCharCode(...new Uint8Array(credential.rawId)));
+      localStorage.setItem(`bio_cred_${username.trim().toLowerCase()}`, rawId);
+      return true;
+    }
+  } catch (err) {
+    console.warn("Registrazione biometrica non riuscita:", err);
+  }
+  return false;
+}
+
+async function verifyBiometric(username) {
+  if (!await isBiometricSupported()) return false;
+  const rawIdBase64 = localStorage.getItem(`bio_cred_${username.trim().toLowerCase()}`);
+  
+  try {
+    const challenge = new Uint8Array(32);
+    window.crypto.getRandomValues(challenge);
+
+    const allowCredentials = [];
+    if (rawIdBase64) {
+      const rawId = Uint8Array.from(atob(rawIdBase64), c => c.charCodeAt(0));
+      allowCredentials.push({
+        id: rawId,
+        type: "public-key"
+      });
+    }
+
+    const options = {
+      publicKey: {
+        challenge: challenge,
+        userVerification: "required",
+        timeout: 60000
+      }
+    };
+    if (allowCredentials.length > 0) {
+      options.publicKey.allowCredentials = allowCredentials;
+    }
+
+    const assertion = await navigator.credentials.get(options);
+    return !!assertion;
+  } catch (err) {
+    console.warn("Verifica biometrica annullata o fallita:", err);
+    return false;
+  }
 }
 
 // --- GESTIONE STATO PASTI ---
@@ -224,11 +311,9 @@ function deleteMeal(id) {
   syncToGoogleSheets("syncAll", { meals: meals });
 }
 
-// --- GEMINI 3.6 FLASH ---
-async function analyzeMealWithGemini(inputText) {
+// --- ESECUZIONE API GEMINI CON FALLBACK AUTOMATICO ---
+async function callGeminiSingleModel(modelName, inputText, nextSnackLabel) {
   const apiKey = getApiKey();
-  const nextSnackLabel = getNextSnackName(currentDate);
-
   const systemInstruction = `Sei un nutrizionista esperto. Analizza la descrizione del pasto fornita in italiano e restituisci ESCLUSIVAMENTE un JSON strutturato con le stime nutrizionali.
 Se il pasto descritto è un generico snack/merenda/spuntino, imposta "mealType" con il valore "${nextSnackLabel}".
 Se è Colazione, Pranzo o Cena, usa rispettivamente "Colazione", "Pranzo", "Cena".
@@ -242,7 +327,7 @@ Schema JSON richiesto:
   "fat": number
 }`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
   const response = await fetch(url, {
     method: "POST",
@@ -255,12 +340,36 @@ Schema JSON richiesto:
   });
 
   if (!response.ok) {
-    const errData = await response.json();
-    throw new Error(errData.error?.message || `Errore HTTP ${response.status}`);
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(errData.error?.message || `HTTP ${response.status}`);
   }
 
   const data = await response.json();
   return JSON.parse(data.candidates?.[0]?.content?.parts?.[0]?.text);
+}
+
+async function analyzeMealWithGemini(inputText) {
+  const nextSnackLabel = getNextSnackName(currentDate);
+  const primaryModel = localStorage.getItem('cal_primary_model') || "gemini-3.6-flash";
+  const fallbackModel = localStorage.getItem('cal_fallback_model') || "gemini-3.1-flash-lite";
+
+  try {
+    return await callGeminiSingleModel(primaryModel, inputText, nextSnackLabel);
+  } catch (primaryErr) {
+    console.warn(`Modello primario (${primaryModel}) fallito:`, primaryErr);
+    
+    const statusEl = document.getElementById('inputStatus');
+    if (statusEl) {
+      statusEl.innerText = `Modello ${primaryModel} occupato. Passaggio a fallback (${fallbackModel})...`;
+      statusEl.style.color = "#f59e0b";
+    }
+
+    try {
+      return await callGeminiSingleModel(fallbackModel, inputText, nextSnackLabel);
+    } catch (fallbackErr) {
+      throw new Error(`Entrambi i modelli (${primaryModel} e ${fallbackModel}) non hanno risposto: ${fallbackErr.message}`);
+    }
+  }
 }
 
 // --- AGGIUNTA PASTO ---
@@ -301,7 +410,7 @@ async function handleMealSubmission(text) {
   }
 }
 
-// --- GESTIONE SELETTORE E MODAL UTENTI ---
+// --- GESTIONE SELETTORE, SBLOCCO E MODALI ---
 function populateUserSelect() {
   const userSelect = document.getElementById('userSelect');
   const profiles = getProfiles();
@@ -310,10 +419,57 @@ function populateUserSelect() {
   Object.keys(profiles).forEach(user => {
     const opt = document.createElement('option');
     opt.value = user;
-    opt.textContent = user;
+    const hasPass = !!profiles[user].password;
+    const hasBio = !!localStorage.getItem(`bio_cred_${user.trim().toLowerCase()}`);
+    opt.textContent = user + (hasPass ? (hasBio ? " 🔒👆" : " 🔒") : "");
     if (user.toLowerCase() === activeUser.toLowerCase()) opt.selected = true;
     userSelect.appendChild(opt);
   });
+}
+
+function switchUser(targetUser) {
+  activeUser = targetUser;
+  localStorage.setItem('cal_active_user', activeUser);
+  populateUserSelect();
+  renderDashboard();
+  syncFromGoogleSheets();
+}
+
+async function requestUserSwitch(targetUser) {
+  const profiles = getProfiles();
+  const profile = profiles[targetUser];
+
+  // Se non c'è password o già sbloccato in sessione
+  if (!profile || !profile.password || sessionStorage.getItem(`unlocked_${targetUser}`)) {
+    switchUser(targetUser);
+    return;
+  }
+
+  // Controllo presenza registrazione biometria per l'utente su questo dispositivo
+  const hasBio = !!localStorage.getItem(`bio_cred_${targetUser.trim().toLowerCase()}`);
+  if (hasBio && await isBiometricSupported()) {
+    const bioOk = await verifyBiometric(targetUser);
+    if (bioOk) {
+      sessionStorage.setItem(`unlocked_${targetUser}`, "true");
+      switchUser(targetUser);
+      return;
+    }
+  }
+
+  // Se la biometria non è configurata, fallisce o viene annullata -> Modal Password
+  pendingUserSwitch = targetUser;
+  document.getElementById('unlockModalText').innerText = `Inserisci la password per accedere al profilo "${targetUser}".`;
+  document.getElementById('unlockPasswordInput').value = "";
+  document.getElementById('unlockError').innerText = "";
+  
+  const tryBioBtn = document.getElementById('tryBioBtn');
+  if (hasBio && await isBiometricSupported()) {
+    tryBioBtn.style.display = "block";
+  } else {
+    tryBioBtn.style.display = "none";
+  }
+
+  document.getElementById('unlockModal').style.display = "flex";
 }
 
 function openProfileModal(isNew = false) {
@@ -321,6 +477,7 @@ function openProfileModal(isNew = false) {
   const profiles = getProfiles();
   const nameGroup = document.getElementById('userNameGroup');
   const modalTitle = document.getElementById('modalTitle');
+  const bioStatusText = document.getElementById('bioStatusText');
 
   if (isNew) {
     modalTitle.innerText = "Nuovo Profilo Utente";
@@ -331,6 +488,8 @@ function openProfileModal(isNew = false) {
     document.getElementById('profWeight').value = "70";
     document.getElementById('profGender').value = "male";
     document.getElementById('profActivityLevel').value = "sedentary";
+    document.getElementById('profPassword').value = "";
+    bioStatusText.innerText = "";
   } else {
     modalTitle.innerText = `Modifica Profilo: ${activeUser}`;
     nameGroup.style.display = "none";
@@ -340,6 +499,10 @@ function openProfileModal(isNew = false) {
     document.getElementById('profHeight').value = p.heightCm || 173;
     document.getElementById('profWeight').value = p.weightKg || 71;
     document.getElementById('profActivityLevel').value = p.activityLevel || "sedentary";
+    document.getElementById('profPassword').value = p.password || "";
+    
+    const hasBio = !!localStorage.getItem(`bio_cred_${activeUser.trim().toLowerCase()}`);
+    bioStatusText.innerText = hasBio ? "Biometria registrata su questo dispositivo" : "Biometria non ancora configurata";
   }
   modal.style.display = "flex";
 }
@@ -348,14 +511,72 @@ function openProfileModal(isNew = false) {
 document.addEventListener('DOMContentLoaded', async () => {
   populateUserSelect();
 
+  // Cambio utente
   const userSelect = document.getElementById('userSelect');
   userSelect.addEventListener('change', (e) => {
-    activeUser = e.target.value;
-    localStorage.setItem('cal_active_user', activeUser);
-    renderDashboard();
-    syncFromGoogleSheets();
+    const targetUser = e.target.value;
+    userSelect.value = activeUser;
+    requestUserSwitch(targetUser);
   });
 
+  // Modal Sblocco Password / Biometria
+  document.getElementById('cancelUnlockBtn').addEventListener('click', () => {
+    document.getElementById('unlockModal').style.display = 'none';
+    pendingUserSwitch = null;
+    populateUserSelect();
+  });
+
+  document.getElementById('tryBioBtn').addEventListener('click', async () => {
+    if (!pendingUserSwitch) return;
+    const bioOk = await verifyBiometric(pendingUserSwitch);
+    if (bioOk) {
+      sessionStorage.setItem(`unlocked_${pendingUserSwitch}`, "true");
+      document.getElementById('unlockModal').style.display = 'none';
+      switchUser(pendingUserSwitch);
+      pendingUserSwitch = null;
+    } else {
+      document.getElementById('unlockError').innerText = "Riconoscimento biometrico non riuscito. Inserisci la password.";
+    }
+  });
+
+  document.getElementById('confirmUnlockBtn').addEventListener('click', () => {
+    if (!pendingUserSwitch) return;
+    const profiles = getProfiles();
+    const profile = profiles[pendingUserSwitch];
+    const enteredPass = document.getElementById('unlockPasswordInput').value.trim();
+
+    if (profile && profile.password === enteredPass) {
+      sessionStorage.setItem(`unlocked_${pendingUserSwitch}`, "true");
+      document.getElementById('unlockModal').style.display = 'none';
+      switchUser(pendingUserSwitch);
+      pendingUserSwitch = null;
+    } else {
+      document.getElementById('unlockError').innerText = "Password errata. Riprova.";
+    }
+  });
+
+  // Registrazione Biometria da Modal Profilo
+  document.getElementById('enrollBioBtn').addEventListener('click', async () => {
+    const isNew = document.getElementById('userNameGroup').style.display !== "none";
+    const targetName = isNew ? document.getElementById('profName').value.trim() : activeUser;
+
+    if (!targetName) {
+      alert("Inserisci prima un nome utente.");
+      return;
+    }
+
+    const ok = await registerBiometric(targetName);
+    const bioStatusText = document.getElementById('bioStatusText');
+    if (ok) {
+      bioStatusText.innerText = "Biometria registrata con successo!";
+      bioStatusText.style.color = "var(--accent)";
+    } else {
+      bioStatusText.innerText = "Registrazione biometrica fallita o annullata.";
+      bioStatusText.style.color = "var(--danger)";
+    }
+  });
+
+  // Modal Profilo
   document.getElementById('editUserBtn').addEventListener('click', () => openProfileModal(false));
   document.getElementById('addUserBtn').addEventListener('click', () => openProfileModal(true));
   document.getElementById('cancelModalBtn').addEventListener('click', () => {
@@ -380,8 +601,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       age: Number(document.getElementById('profAge').value) || 20,
       heightCm: Number(document.getElementById('profHeight').value) || 170,
       weightKg: Number(document.getElementById('profWeight').value) || 70,
-      activityLevel: document.getElementById('profActivityLevel').value
+      activityLevel: document.getElementById('profActivityLevel').value,
+      password: document.getElementById('profPassword').value.trim()
     };
+
+    sessionStorage.setItem(`unlocked_${targetName}`, "true");
 
     saveProfilesLocally(profiles);
     saveProfilesToCloud(profiles);
@@ -391,6 +615,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     syncFromGoogleSheets();
   });
 
+  // Modal Modelli AI
+  document.getElementById('openAiModalBtn').addEventListener('click', () => {
+    document.getElementById('primaryModelSelect').value = localStorage.getItem('cal_primary_model') || "gemini-3.6-flash";
+    document.getElementById('fallbackModelSelect').value = localStorage.getItem('cal_fallback_model') || "gemini-3.1-flash-lite";
+    document.getElementById('aiModal').style.display = "flex";
+  });
+
+  document.getElementById('closeAiModalBtn').addEventListener('click', () => {
+    const primary = document.getElementById('primaryModelSelect').value;
+    const fallback = document.getElementById('fallbackModelSelect').value;
+    localStorage.setItem('cal_primary_model', primary);
+    localStorage.setItem('cal_fallback_model', fallback);
+    document.getElementById('aiModal').style.display = "none";
+  });
+
+  // Date picker
   const datePicker = document.getElementById('datePicker');
   if (datePicker) {
     datePicker.value = currentDate;
@@ -400,6 +640,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // Invio testo
   document.getElementById('submitTextBtn').addEventListener('click', () => {
     const text = document.getElementById('mealTextInput').value;
     handleMealSubmission(text);
@@ -412,7 +653,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Supporto Vocale con auto-start se ?voice=1
+  // Supporto Vocale
   const voiceBtn = document.getElementById('voiceBtn');
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -461,6 +702,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   } else {
     voiceBtn.style.display = 'none';
+  }
+
+  // Gestione URL param ?meal=... da iPad/Shortcut
+  const urlParams = new URLSearchParams(window.location.search);
+  const mealParam = urlParams.get('meal');
+  if (mealParam && mealParam.trim() !== '') {
+    const decodedMeal = decodeURIComponent(mealParam).trim();
+    document.getElementById('mealTextInput').value = decodedMeal;
+    handleMealSubmission(decodedMeal);
+    window.history.replaceState({}, document.title, window.location.pathname);
   }
 
   await syncProfilesFromCloud();
