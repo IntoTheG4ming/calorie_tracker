@@ -198,6 +198,16 @@
     }
     .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 1.2rem; }
     .modal-actions button { padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; border: none; }
+    .btn-delete-profile {
+      background: rgba(239, 68, 68, 0.15) !important;
+      color: var(--danger) !important;
+      border: 1px solid var(--danger) !important;
+      font-weight: 600;
+    }
+    .btn-delete-profile:hover {
+      background: var(--danger) !important;
+      color: #ffffff !important;
+    }
   </style>
 </head>
 <body>
@@ -214,7 +224,7 @@
   <header>
     <div>
       <h1>Calorie Tracker</h1>
-      <span class="badge">v1.9.0</span>
+      <span class="badge">v1.9.1</span>
     </div>
     <div class="header-actions">
       <button id="openAiModalBtn" class="btn-icon" title="Impostazioni Modelli AI">🤖 Modelli AI</button>
@@ -319,9 +329,12 @@
         <button type="button" id="enrollBioBtn" class="btn-icon" style="padding: 0.6rem; text-align: center;">👆 Registra Biometria su questo dispositivo</button>
         <span id="bioStatusText" style="font-size: 0.75rem; color: var(--text-muted); text-align: center; margin-top: 2px;"></span>
       </div>
-      <div class="modal-actions">
-        <button id="cancelModalBtn" style="background:#334155; color:var(--text);">Annulla</button>
-        <button id="saveProfileBtn" style="background:var(--accent); color:#0f172a; font-weight:bold;">Salva</button>
+      <div class="modal-actions" style="justify-content: space-between;">
+        <button id="deleteProfileBtn" class="btn-delete-profile" style="display: none;">🗑️ Elimina</button>
+        <div style="display: flex; gap: 8px;">
+          <button id="cancelModalBtn" style="background:#334155; color:var(--text);">Annulla</button>
+          <button id="saveProfileBtn" style="background:var(--accent); color:#0f172a; font-weight:bold;">Salva</button>
+        </div>
       </div>
     </div>
   </div>
@@ -381,7 +394,6 @@
 
   <script src="./app.js"></script>
   <script>
-    // RIPRISTINO RILEVAMENTO E AGGIORNAMENTO AUTOMATICO SERVICE WORKER
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js').then((registration) => {

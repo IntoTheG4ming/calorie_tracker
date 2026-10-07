@@ -48,24 +48,7 @@ function saveProfilesLocally(profiles) {
 let activeUser = localStorage.getItem('cal_active_user') || "Emanuele";
 let pendingUserSwitch = null;
 
-// --- VERIFICA STATO DI AUTENTICAZIONE UTENTE ---
-function isUserUnlocked(username) {
-  const profiles = getProfiles();
-  const profile = profiles[username];
-  if (!profile || !profile.password) return true;
-  return sessionStorage.getItem(`unlocked_${username}`) === "true";
-}
-
-function calculateMetricsFor(profile) {
-  if (!profile) return { bmr: 1700, tdee: 2040 };
-  let bmr = (10 * profile.weightKg) + (6.25 * profile.heightCm) - (5 * profile.age);
-  bmr = (profile.gender === "male") ? bmr + 5 : bmr - 161;
-  const multiplier = ACTIVITY_MULTIPLIERS[profile.activityLevel] || 1.2;
-  const tdee = Math.round(bmr * multiplier);
-  return { bmr: Math.round(bmr), tdee };
-}
-
-// --- CONVERSIONE BUFFER WEBAUTHN PER PERSISTENZA PERMANENTE ---
+// --- CRITTOGRAFIA ZERO-KNOWLEDGE (WEB CRYPTO API AES-GCM) ---
 function bufferToBase64(buffer) {
   let binary = '';
   const bytes = new Uint8Array(buffer);
@@ -84,7 +67,95 @@ function base64ToBuffer(base64) {
   return bytes.buffer;
 }
 
-// --- SUPPORTO ED ESECUZIONE WEBAUTHN (BIOMETRIA) ---
+async function deriveCryptoKey(password, username) {
+  const enc = new TextEncoder();
+  const salt = enc.encode(`cal_tracker_salt_${username.toLowerCase()}`);
+  const keyMaterial = await window.crypto.subtle.importKey(
+    "raw",
+    enc.encode(password || "default_unlocked_pass"),
+    { name: "PBKDF2" },
+    false,
+    ["deriveKey"]
+  );
+  return window.crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt: salt,
+      iterations: 100000,
+      hash: "SHA-256"
+    },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+async function encryptData(dataObj, password, username) {
+  try {
+    const key = await deriveCryptoKey(password, username);
+    const iv = window.crypto.getRandomValues(new Uint8Array(12));
+    const enc = new TextEncoder();
+    const encrypted = await window.crypto.subtle.encrypt(
+      { name: "AES-GCM", iv: iv },
+      key,
+      enc.encode(JSON.stringify(dataObj))
+    );
+    return JSON.stringify({
+      cipher: bufferToBase64(encrypted),
+      iv: bufferToBase64(iv)
+    });
+  } catch (err) {
+    console.error("Errore crittografia:", err);
+    return JSON.stringify(dataObj);
+  }
+}
+
+async function decryptData(cipherText, password, username) {
+  try {
+    if (!cipherText) return [];
+    const parsed = typeof cipherText === 'string' ? JSON.parse(cipherText) : cipherText;
+    if (!parsed.cipher || !parsed.iv) return parsed; // Fallback se non cifrato
+
+    const key = await deriveCryptoKey(password, username);
+    const decrypted = await window.crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: base64ToBuffer(parsed.iv) },
+      key,
+      base64ToBuffer(parsed.cipher)
+    );
+    const dec = new TextDecoder();
+    return JSON.parse(dec.decode(decrypted));
+  } catch (err) {
+    console.warn("Impossibile decifrare i dati:", err);
+    return [];
+  }
+}
+
+// --- VERIFICA STATO DI AUTENTICAZIONE UTENTE ---
+function isUserUnlocked(username) {
+  const profiles = getProfiles();
+  const profile = profiles[username];
+  if (!profile || !profile.password) return true;
+  return sessionStorage.getItem(`unlocked_${username}`) === "true";
+}
+
+function getUserSessionPassword(username) {
+  const profiles = getProfiles();
+  const profile = profiles[username];
+  if (!profile || !profile.password) return "";
+  return sessionStorage.getItem(`pass_${username}`) || "";
+}
+
+function calculateMetricsFor(profile) {
+  if (!profile) return { bmr: 1700, tdee: 2040 };
+  let bmr = (10 * profile.weightKg) + (6.25 * profile.heightCm) - (5 * profile.age);
+  bmr = (profile.gender === "male") ? bmr + 5 : bmr - 161;
+  const multiplier = ACTIVITY_MULTIPLIERS[profile.activityLevel] || 1.2;
+  const tdee = Math.round(bmr * multiplier);
+  return { bmr: Math.round(bmr), tdee };
+}
+
+// --- SUPPORTO ED ESECUZIONE WEBAUTHN (BIOMETRIA PERMANENTE) ---
 async function isBiometricSupported() {
   return window.PublicKeyCredential &&
          typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function' &&
@@ -169,20 +240,24 @@ async function verifyBiometric(username) {
   }
 }
 
-// --- GESTIONE STATO PASTI ---
+// --- GESTIONE STATO PASTI CON CRITTOGRAFIA ---
 let currentDate = new Date().toISOString().split('T')[0];
 
 function getStoredMealsKey() {
   return `calorie_tracker_meals_${activeUser.trim().toLowerCase()}`;
 }
 
-function getStoredMeals() {
-  const data = localStorage.getItem(getStoredMealsKey());
-  return data ? JSON.parse(data) : [];
+async function getStoredMeals() {
+  const rawData = localStorage.getItem(getStoredMealsKey());
+  if (!rawData) return [];
+  const pass = getUserSessionPassword(activeUser);
+  return await decryptData(rawData, pass, activeUser);
 }
 
-function saveMeals(meals) {
-  localStorage.setItem(getStoredMealsKey(), JSON.stringify(meals));
+async function saveMeals(meals) {
+  const pass = getUserSessionPassword(activeUser);
+  const encryptedPayload = await encryptData(meals, pass, activeUser);
+  localStorage.setItem(getStoredMealsKey(), encryptedPayload);
 }
 
 // --- SINCRONIZZAZIONE PROFILI (CLOUD) ---
@@ -236,8 +311,17 @@ async function syncFromGoogleSheets() {
 
     const result = await res.json();
     if (result.status === "success" && Array.isArray(result.data)) {
-      saveMeals(result.data);
-      renderDashboard();
+      const pass = getUserSessionPassword(activeUser);
+      let mealsToSave = [];
+
+      if (result.data.length > 0 && result.data[0].encryptedBlob) {
+        mealsToSave = await decryptData(result.data[0].encryptedBlob, pass, activeUser);
+      } else {
+        mealsToSave = result.data;
+      }
+
+      await saveMeals(mealsToSave);
+      await renderDashboard();
       if (statusEl) statusEl.innerText = `Sincronizzato: ${activeUser}`;
     }
   } catch (err) {
@@ -249,11 +333,21 @@ async function syncFromGoogleSheets() {
 async function syncToGoogleSheets(action, payload) {
   if (!SHEETS_API_URL || !isUserUnlocked(activeUser)) return;
   try {
+    const pass = getUserSessionPassword(activeUser);
+    const meals = payload.meals || (payload.meal ? [payload.meal] : []);
+    const encryptedBlob = await encryptData(meals, pass, activeUser);
+
     await fetch(SHEETS_API_URL, {
       method: "POST",
       mode: "no-cors",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ target: "meals", action: action, user: activeUser, ...payload })
+      body: JSON.stringify({
+        target: "meals",
+        action: action,
+        user: activeUser,
+        encryptedBlob: encryptedBlob,
+        ...payload
+      })
     });
   } catch (err) {
     console.warn("Invio dati pasti a Google Sheets fallito:", err);
@@ -261,14 +355,14 @@ async function syncToGoogleSheets(action, payload) {
 }
 
 // --- SPUNTINI PROGRESSIVI ---
-function getNextSnackName(date) {
-  const meals = getStoredMeals().filter(m => m.date === date);
+async function getNextSnackName(date) {
+  const meals = (await getStoredMeals()).filter(m => m.date === date);
   const snackCount = meals.filter(m => m.type && m.type.startsWith("Spuntino")).length;
   return `Spuntino ${snackCount + 1}`;
 }
 
 // --- RENDERING DASHBOARD ---
-function renderDashboard() {
+async function renderDashboard() {
   if (!isUserUnlocked(activeUser)) {
     maskDashboardForLock();
     return;
@@ -278,7 +372,7 @@ function renderDashboard() {
   const profile = profiles[activeUser] || FALLBACK_PROFILES["Emanuele"];
   const { bmr, tdee } = calculateMetricsFor(profile);
 
-  const allMeals = getStoredMeals();
+  const allMeals = await getStoredMeals();
   const dayMeals = allMeals.filter(m => m.date === currentDate);
 
   let totalCal = 0, totalP = 0, totalC = 0, totalF = 0;
@@ -339,12 +433,12 @@ function renderDashboard() {
   });
 }
 
-function deleteMeal(id) {
+async function deleteMeal(id) {
   if (!isUserUnlocked(activeUser)) return;
-  let meals = getStoredMeals();
+  let meals = await getStoredMeals();
   meals = meals.filter(m => m.id !== id);
-  saveMeals(meals);
-  renderDashboard();
+  await saveMeals(meals);
+  await renderDashboard();
   syncToGoogleSheets("syncAll", { meals: meals });
 }
 
@@ -359,6 +453,50 @@ function maskDashboardForLock() {
   const progressBar = document.getElementById('calorieProgressBar');
   if (progressBar) progressBar.style.width = "0%";
   document.getElementById('mealsList').innerHTML = '<div style="text-align:center; color: var(--text-muted); padding: 2rem;">🔒 Profilo bloccato. Autenticati per accedere ai dati.</div>';
+}
+
+// --- ELIMINAZIONE PROFILO ---
+async function deleteProfile(targetUser) {
+  if (!confirm(`Sei sicuro di voler eliminare definitivamente il profilo "${targetUser}" e tutti i suoi pasti? L'azione è irreversibile.`)) {
+    return;
+  }
+
+  const profiles = getProfiles();
+  delete profiles[targetUser];
+  saveProfilesLocally(profiles);
+
+  // Rimuovi pasti e biometria locale
+  localStorage.removeItem(`calorie_tracker_meals_${targetUser.trim().toLowerCase()}`);
+  localStorage.removeItem(`bio_cred_${targetUser.trim().toLowerCase()}`);
+  sessionStorage.removeItem(`unlocked_${targetUser}`);
+  sessionStorage.removeItem(`pass_${targetUser}`);
+
+  // Invia richiesta di eliminazione al cloud
+  if (SHEETS_API_URL) {
+    try {
+      await fetch(SHEETS_API_URL, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: "profiles", action: "deleteProfile", user: targetUser, profiles: profiles })
+      });
+    } catch (err) {
+      console.warn("Richiesta eliminazione profilo al cloud fallita:", err);
+    }
+  }
+
+  // Aggiorna interfaccia
+  const remainingUsers = Object.keys(profiles);
+  if (remainingUsers.length > 0) {
+    activeUser = remainingUsers[0];
+    localStorage.setItem('cal_active_user', activeUser);
+  }
+
+  document.getElementById('userModal').style.display = 'none';
+  populateUserSelect();
+  renderProfilesGrid();
+  maskDashboardForLock();
+  document.getElementById('landingScreen').style.display = 'flex';
 }
 
 // --- RENDERING GRID LANDING SCREEN (STILE NETFLIX) ---
@@ -406,9 +544,9 @@ async function selectProfileFromLanding(targetUser) {
   }
 }
 
-function onAuthenticationSuccess() {
+async function onAuthenticationSuccess() {
   document.getElementById('landingScreen').style.display = 'none';
-  renderDashboard();
+  await renderDashboard();
   syncFromGoogleSheets();
 }
 
@@ -450,7 +588,7 @@ Schema JSON richiesto:
 }
 
 async function analyzeMealWithGemini(inputText) {
-  const nextSnackLabel = getNextSnackName(currentDate);
+  const nextSnackLabel = await getNextSnackName(currentDate);
   const primaryModel = localStorage.getItem('cal_primary_model') || "gemini-3.6-flash";
   const fallbackModel = localStorage.getItem('cal_fallback_model') || "gemini-3.1-flash-lite";
 
@@ -499,11 +637,11 @@ async function handleMealSubmission(text) {
       fat: Math.round(result.fat) || 0
     };
 
-    const meals = getStoredMeals();
+    const meals = await getStoredMeals();
     meals.push(newMeal);
-    saveMeals(meals);
-    renderDashboard();
-    syncToGoogleSheets("add", { meal: newMeal });
+    await saveMeals(meals);
+    await renderDashboard();
+    syncToGoogleSheets("add", { meal: newMeal, meals: meals });
 
     statusEl.innerText = "Pasto aggiunto con successo!";
     statusEl.style.color = "var(--accent)";
@@ -569,6 +707,7 @@ async function requestUserSwitch(targetUser) {
     const bioOk = await verifyBiometric(targetUser);
     if (bioOk) {
       sessionStorage.setItem(`unlocked_${targetUser}`, "true");
+      sessionStorage.setItem(`pass_${targetUser}`, profile.password);
       document.getElementById('unlockModal').style.display = 'none';
       switchUser(targetUser);
       pendingUserSwitch = null;
@@ -590,10 +729,12 @@ function openProfileModal(isNew = false) {
   const nameGroup = document.getElementById('userNameGroup');
   const modalTitle = document.getElementById('modalTitle');
   const bioStatusText = document.getElementById('bioStatusText');
+  const deleteBtn = document.getElementById('deleteProfileBtn');
 
   if (isNew) {
     modalTitle.innerText = "Nuovo Profilo Utente";
     nameGroup.style.display = "flex";
+    deleteBtn.style.display = "none";
     document.getElementById('profName').value = "";
     document.getElementById('profAge').value = "25";
     document.getElementById('profHeight').value = "175";
@@ -605,6 +746,7 @@ function openProfileModal(isNew = false) {
   } else {
     modalTitle.innerText = `Modifica Profilo: ${activeUser}`;
     nameGroup.style.display = "none";
+    deleteBtn.style.display = "block";
     const p = profiles[activeUser] || {};
     document.getElementById('profGender').value = p.gender || "male";
     document.getElementById('profAge').value = p.age || 20;
@@ -621,22 +763,21 @@ function openProfileModal(isNew = false) {
 
 // --- INIZIALIZZAZIONE BLOCCANTE E CARICAMENTO DIFFERITO ---
 document.addEventListener('DOMContentLoaded', async () => {
-  // Mascheramento sincrono
   maskDashboardForLock();
 
-  // Rendering iniziale landing grid e selettore
   populateUserSelect();
   renderProfilesGrid();
 
-  // Mostra sempre la Landing Screen all'apertura/ricaricamento
   document.getElementById('landingScreen').style.display = 'flex';
 
-  // Gestione pulsante Aggiungi Utente da Landing Page
   document.getElementById('landingAddUserBtn').addEventListener('click', () => {
     openProfileModal(true);
   });
 
-  // Gestione pulsante Esci / Blocca
+  document.getElementById('deleteProfileBtn').addEventListener('click', () => {
+    deleteProfile(activeUser);
+  });
+
   document.getElementById('lockAppBtn').addEventListener('click', () => {
     sessionStorage.clear();
     maskDashboardForLock();
@@ -644,7 +785,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('landingScreen').style.display = 'flex';
   });
 
-  // Cambio utente da select
   const userSelect = document.getElementById('userSelect');
   userSelect.addEventListener('change', async (e) => {
     const targetUser = e.target.value;
@@ -655,7 +795,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Modal Sblocco Password / Biometria
   document.getElementById('cancelUnlockBtn').addEventListener('click', () => {
     document.getElementById('unlockModal').style.display = 'none';
     pendingUserSwitch = null;
@@ -666,7 +805,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!pendingUserSwitch) return;
     const bioOk = await verifyBiometric(pendingUserSwitch);
     if (bioOk) {
+      const profiles = getProfiles();
+      const profile = profiles[pendingUserSwitch];
       sessionStorage.setItem(`unlocked_${pendingUserSwitch}`, "true");
+      sessionStorage.setItem(`pass_${pendingUserSwitch}`, profile.password || "");
       document.getElementById('unlockModal').style.display = 'none';
       switchUser(pendingUserSwitch);
       pendingUserSwitch = null;
@@ -684,6 +826,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (profile && profile.password === enteredPass) {
       sessionStorage.setItem(`unlocked_${pendingUserSwitch}`, "true");
+      sessionStorage.setItem(`pass_${pendingUserSwitch}`, enteredPass);
       document.getElementById('unlockModal').style.display = 'none';
       switchUser(pendingUserSwitch);
       pendingUserSwitch = null;
@@ -693,7 +836,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Registrazione Biometria da Modal Profilo
   document.getElementById('enrollBioBtn').addEventListener('click', async () => {
     const isNew = document.getElementById('userNameGroup').style.display !== "none";
     const targetName = isNew ? document.getElementById('profName').value.trim() : activeUser;
@@ -716,7 +858,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Modal Profilo
   document.getElementById('editUserBtn').addEventListener('click', () => openProfileModal(false));
   document.getElementById('addUserBtn').addEventListener('click', () => openProfileModal(true));
   document.getElementById('cancelModalBtn').addEventListener('click', () => {
@@ -736,16 +877,19 @@ document.addEventListener('DOMContentLoaded', async () => {
       localStorage.setItem('cal_active_user', activeUser);
     }
 
+    const enteredPass = document.getElementById('profPassword').value.trim();
+
     profiles[targetName] = {
       gender: document.getElementById('profGender').value,
       age: Number(document.getElementById('profAge').value) || 20,
       heightCm: Number(document.getElementById('profHeight').value) || 170,
       weightKg: Number(document.getElementById('profWeight').value) || 70,
       activityLevel: document.getElementById('profActivityLevel').value,
-      password: document.getElementById('profPassword').value.trim()
+      password: enteredPass
     };
 
     sessionStorage.setItem(`unlocked_${targetName}`, "true");
+    sessionStorage.setItem(`pass_${targetName}`, enteredPass);
 
     saveProfilesLocally(profiles);
     saveProfilesToCloud(profiles);
@@ -756,7 +900,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     onAuthenticationSuccess();
   });
 
-  // Modal Modelli AI
   document.getElementById('openAiModalBtn').addEventListener('click', () => {
     document.getElementById('primaryModelSelect').value = localStorage.getItem('cal_primary_model') || "gemini-3.6-flash";
     document.getElementById('fallbackModelSelect').value = localStorage.getItem('cal_fallback_model') || "gemini-3.1-flash-lite";
@@ -771,7 +914,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('aiModal').style.display = "none";
   });
 
-  // Date picker
   const datePicker = document.getElementById('datePicker');
   if (datePicker) {
     datePicker.value = currentDate;
@@ -783,7 +925,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Invio testo
   document.getElementById('submitTextBtn').addEventListener('click', () => {
     const text = document.getElementById('mealTextInput').value;
     handleMealSubmission(text);
@@ -796,7 +937,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Supporto Vocale
   const voiceBtn = document.getElementById('voiceBtn');
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -844,6 +984,5 @@ document.addEventListener('DOMContentLoaded', async () => {
     voiceBtn.style.display = 'none';
   }
 
-  // Sincronizza metadata profili in background per la landing page
   await syncProfilesFromCloud();
 });
