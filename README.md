@@ -1,7 +1,8 @@
-# 🥗 Voice Calorie Tracker PWA (v1.9.2)
+```markdown
+# 🥗 Voice Calorie Tracker PWA
 
 ![PWA Ready](https://img.shields.io/badge/PWA-Ready-10b981?style=flat-square&logo=pwa)
-![Gemini AI](https://img.shields.io/badge/AI-Gemini%203.6%20Flash-8e44ad?style=flat-square&logo=google)
+![Gemini AI](https://img.shields.io/badge/AI-Gemini%20Flash-8e44ad?style=flat-square&logo=google)
 ![Zero-Knowledge Encryption](https://img.shields.io/badge/Security-AES--GCM%20256-blue?style=flat-square)
 ![Database](https://img.shields.io/badge/Database-Google%20Sheets-34a853?style=flat-square&logo=googlesheets)
 ![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)
@@ -17,13 +18,13 @@ L'obiettivo principale dell'applicazione è offrire un'esperienza di tracciament
 ### 🌟 Caratteristiche Chiave
 
 * 🧠 **Parsing Nutrizionale guidato da IA**: Trascrivi o descrivi a voce cosa hai mangiato in italiano colloquiale (es. *"100g di riso con tonno e un cucchiaio d'olio d'oliva"*). L'IA estrae ed elabora istantaneamente calorie, proteine, carboidrati e grassi.
-* ⚡ **Resilienza e Fallback AI Automatico**: Utilizzo del modello primario `gemini-3.6-flash` con commutazione automatica su un modello secondario di backup (`gemini-3.1-flash-lite`) in caso di picchi di traffico o saturazione della quota API gratuita.
+* ⚡ **Resilienza e Fallback AI Automatico**: Utilizzo del modello primario (`gemini-3.6-flash`) con commutazione automatica su un modello secondario di backup (`gemini-3.1-flash-lite`) in caso di picchi di traffico o saturazione della quota API gratuita.
 * 🔐 **Crittografia Zero-Knowledge Client-Side (AES-GCM 256)**: Tutti i dati nutrizionali e le informazioni del profilo vengono cifrati direttamente all'interno del browser con una chiave derivata via **PBKDF2**. I dati salvati localmente o inviati a Google Sheets sono del tutto illeggibili a terzi.
 * 🎬 **Landing Screen Multi-Profilo "Stile Netflix"**: Selezione visiva e intuitiva del profilo utente all'avvio dell'applicazione con avatar cromatici e indicatori dello stato di protezione.
-* 👆 **Autenticazione Biometrica Hardware (`WebAuthn`) & Password**: Protezione di ciascun profilo tramite password e sblocco biometrico locale con impronta digitale, Face ID, Touch ID o Windows Hello.
+* 👆 **Autenticazione Biometrica Hardware (`WebAuthn`) & Password**: Protezione di ciascun profilo tramite password e/o sblocco biometrico locale con impronta digitale, Windows Hello, Face ID o Touch ID.
 * 📊 **Database Cloud Serverless su Google Sheets**: Archiviazione dati isolata per utente su fogli di calcolo personali tramite Google Apps Script. Nessun server a pagamento o database proprietario richiesto.
 * 📲 **Integrazione iOS / iPadOS**: Avvio diretto del tracciamento vocale da Comandi Rapidi o Siri tramite parametri URL integrati.
-* 💻 **Esperienza Cross-Platform & PWA Installabile**: Installabile come app nativa su Windows, macOS, Linux, Android e iOS con gestione automatica degli aggiornamenti Service Worker.
+* 💻 **Esperienza Cross-Platform & PWA Installabile**: Installabile come app nativa su Windows, macOS, Linux, Android e iOS con gestione automatica degli aggiornamenti via Service Worker.
 
 ---
 
@@ -36,7 +37,7 @@ L'obiettivo principale dell'applicazione è offrire un'esperienza di tracciament
 | **Biometria** | WebAuthn API | Autenticazione hardware locale per impronta, Touch ID, Face ID e Windows Hello. |
 | **AI Engine** | Google Gemini API (`v1beta`) | Modello LLM per la conversione del linguaggio naturale in JSON nutrizionale. |
 | **Backend / DB** | Google Apps Script + Google Sheets | REST API serverless personalizzata per la persistenza e la sincronizzazione cloud. |
-| **PWA Layer** | Service Worker (`v1.9.2`) & Web Manifest | Caching offline, installabilità nativa e aggiornamento automatico background. |
+| **PWA Layer** | Service Worker & Web Manifest | Caching offline, installabilità nativa e aggiornamento automatico background. |
 
 ---
 
@@ -59,7 +60,7 @@ Questa procedura va eseguita una sola volta e permette di creare il tuo database
 6. Clicca sul pulsante blu **Esegui deployment** (in alto a destra) ➔ **Nuovo deployment**.
 7. Clicca sull'icona a ingranaggio ⚙️ accanto a "Seleziona tipo" e scegli **Applicazione Web**.
 8. Configura i campi come segue:
-   * **Descrizione**: `Backend Calorie Tracker v1.9.2`
+   * **Descrizione**: `Backend Calorie Tracker`
    * **Esegui come**: `Utente corrente (me@gmail.com)`
    * **Chi può accedere**: `Chiunque`
 9. Clicca su **Esegui deployment**, autorizza nuovamente se richiesto, e **copia l'URL dell'applicazione web** fornito (avrà una struttura del tipo `https://script.google.com/macros/s/.../exec`).
@@ -136,7 +137,7 @@ Per accedere all'app da smartphone, tablet o qualsiasi dispositivo ovunque ti tr
 2. Carica ed effettua il push dei file del progetto sul tuo repository GitHub:
 ```bash
 git add .
-git commit -m "deploy: configurazione iniziale v1.9.2"
+git commit -m "deploy: configurazione iniziale"
 git push origin main
 
 ```
@@ -193,4 +194,3 @@ Puoi registrare un pasto a voce tramite Siri o widget della schermata Home crean
 ## 📄 Licenza
 
 Questo progetto è distribuito sotto licenza **MIT**. Libero per uso personale e modifiche.
-
