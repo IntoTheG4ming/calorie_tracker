@@ -36,7 +36,7 @@ L'obiettivo principale dell'applicazione è offrire un'esperienza di tracciament
 | **Biometria** | WebAuthn API | Autenticazione hardware locale per impronta, Touch ID, Face ID e Windows Hello. |
 | **AI Engine** | Google Gemini API (`v1beta`) | Modello LLM per la conversione del linguaggio naturale in JSON nutrizionale. |
 | **Backend / DB** | Google Apps Script + Google Sheets | REST API serverless personalizzata per la persistenza e la sincronizzazione cloud. |
-| **PWA Layer** | Service Worker (`v1.9.1`) & Web Manifest | Caching offline, installabilità nativa e aggiornamento automatico background. |
+| **PWA Layer** | Service Worker (`v1.9.2`) & Web Manifest | Caching offline, installabilità nativa e aggiornamento automatico background. |
 
 ---
 
@@ -59,7 +59,7 @@ Questa procedura va eseguita una sola volta e permette di creare il tuo database
 6. Clicca sul pulsante blu **Esegui deployment** (in alto a destra) ➔ **Nuovo deployment**.
 7. Clicca sull'icona a ingranaggio ⚙️ accanto a "Seleziona tipo" e scegli **Applicazione Web**.
 8. Configura i campi come segue:
-   * **Descrizione**: `Backend Calorie Tracker v1.9.1`
+   * **Descrizione**: `Backend Calorie Tracker v1.9.2`
    * **Esegui come**: `Utente corrente (me@gmail.com)`
    * **Chi può accedere**: `Chiunque`
 9. Clicca su **Esegui deployment**, autorizza nuovamente se richiesto, e **copia l'URL dell'applicazione web** fornito (avrà una struttura del tipo `https://script.google.com/macros/s/.../exec`).
@@ -136,7 +136,7 @@ Per accedere all'app da smartphone, tablet o qualsiasi dispositivo ovunque ti tr
 2. Carica ed effettua il push dei file del progetto sul tuo repository GitHub:
 ```bash
 git add .
-git commit -m "deploy: configurazione iniziale v1.9.1"
+git commit -m "deploy: configurazione iniziale v1.9.2"
 git push origin main
 
 ```
