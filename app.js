@@ -39,6 +39,14 @@ function saveProfilesLocally(profiles) {
 let activeUser = localStorage.getItem('cal_active_user') || "Emanuele";
 let pendingUserSwitch = null;
 
+// --- VERIFICA STATO DI AUTENTICAZIONE UTENTE ---
+function isUserUnlocked(username) {
+  const profiles = getProfiles();
+  const profile = profiles[username];
+  if (!profile || !profile.password) return true;
+  return sessionStorage.getItem(`unlocked_${username}`) === "true";
+}
+
 function calculateMetricsFor(profile) {
   if (!profile) return { bmr: 1700, tdee: 2040 };
   let bmr = (10 * profile.weightKg) + (6.25 * profile.heightCm) - (5 * profile.age);
@@ -190,7 +198,7 @@ async function saveProfilesToCloud(profiles) {
 
 // --- SINCRONIZZAZIONE PASTI (CLOUD) ---
 async function syncFromGoogleSheets() {
-  if (!SHEETS_API_URL) return;
+  if (!SHEETS_API_URL || !isUserUnlocked(activeUser)) return;
   const statusEl = document.getElementById('syncStatus');
   if (statusEl) statusEl.innerText = `Sincronizzazione (${activeUser})...`;
 
@@ -216,7 +224,7 @@ async function syncFromGoogleSheets() {
 }
 
 async function syncToGoogleSheets(action, payload) {
-  if (!SHEETS_API_URL) return;
+  if (!SHEETS_API_URL || !isUserUnlocked(activeUser)) return;
   try {
     await fetch(SHEETS_API_URL, {
       method: "POST",
@@ -238,6 +246,11 @@ function getNextSnackName(date) {
 
 // --- RENDERING DASHBOARD ---
 function renderDashboard() {
+  if (!isUserUnlocked(activeUser)) {
+    maskDashboardForLock();
+    return;
+  }
+
   const profiles = getProfiles();
   const profile = profiles[activeUser] || FALLBACK_PROFILES["Emanuele"];
   const { bmr, tdee } = calculateMetricsFor(profile);
@@ -304,6 +317,7 @@ function renderDashboard() {
 }
 
 function deleteMeal(id) {
+  if (!isUserUnlocked(activeUser)) return;
   let meals = getStoredMeals();
   meals = meals.filter(m => m.id !== id);
   saveMeals(meals);
@@ -319,6 +333,8 @@ function maskDashboardForLock() {
   document.getElementById('totalFat').innerText = "-";
   document.getElementById('targetTdee').innerText = "---";
   document.getElementById('userBmrVal').innerText = "---";
+  const progressBar = document.getElementById('calorieProgressBar');
+  if (progressBar) progressBar.style.width = "0%";
   document.getElementById('mealsList').innerHTML = '<div style="text-align:center; color: var(--text-muted); padding: 2rem;">🔒 Profilo bloccato. Autenticati per accedere ai dati.</div>';
 }
 
@@ -385,6 +401,11 @@ async function analyzeMealWithGemini(inputText) {
 
 // --- AGGIUNTA PASTO ---
 async function handleMealSubmission(text) {
+  if (!isUserUnlocked(activeUser)) {
+    alert("Devi prima sbloccare il profilo per aggiungere un pasto.");
+    requestUserSwitch(activeUser);
+    return;
+  }
   if (!text || text.trim() === '') return;
   const statusEl = document.getElementById('inputStatus');
   statusEl.innerText = `Analisi per ${activeUser}...`;
@@ -459,23 +480,13 @@ async function requestUserSwitch(targetUser) {
   // Maschera i dati finché non c'è l'autenticazione
   maskDashboardForLock();
 
-  // Controllo presenza registrazione biometria
-  const hasBio = !!localStorage.getItem(`bio_cred_${targetUser.trim().toLowerCase()}`);
-  if (hasBio && await isBiometricSupported()) {
-    const bioOk = await verifyBiometric(targetUser);
-    if (bioOk) {
-      sessionStorage.setItem(`unlocked_${targetUser}`, "true");
-      switchUser(targetUser);
-      return true;
-    }
-  }
-
-  // Fallback a modal password se biometria fallisce o non è presente
+  // Imposta lo stato di attesa della modal
   pendingUserSwitch = targetUser;
   document.getElementById('unlockModalText').innerText = `Inserisci la password per accedere al profilo "${targetUser}".`;
   document.getElementById('unlockPasswordInput').value = "";
   document.getElementById('unlockError').innerText = "";
   
+  const hasBio = !!localStorage.getItem(`bio_cred_${targetUser.trim().toLowerCase()}`);
   const tryBioBtn = document.getElementById('tryBioBtn');
   if (hasBio && await isBiometricSupported()) {
     tryBioBtn.style.display = "block";
@@ -484,10 +495,28 @@ async function requestUserSwitch(targetUser) {
   }
 
   document.getElementById('unlockModal').style.display = "flex";
+
+  // Tenta sblocco biometrico automatico se registrato
+  if (hasBio && await isBiometricSupported()) {
+    const bioOk = await verifyBiometric(targetUser);
+    if (bioOk) {
+      sessionStorage.setItem(`unlocked_${targetUser}`, "true");
+      document.getElementById('unlockModal').style.display = 'none';
+      switchUser(targetUser);
+      pendingUserSwitch = null;
+      return true;
+    }
+  }
+
   return false;
 }
 
 function openProfileModal(isNew = false) {
+  if (!isNew && !isUserUnlocked(activeUser)) {
+    requestUserSwitch(activeUser);
+    return;
+  }
+
   const modal = document.getElementById('userModal');
   const profiles = getProfiles();
   const nameGroup = document.getElementById('userNameGroup');
@@ -524,6 +553,11 @@ function openProfileModal(isNew = false) {
 
 // --- INIZIALIZZAZIONE BLOCCANTE ALL'AVVIO ---
 document.addEventListener('DOMContentLoaded', async () => {
+  // 1. Mascheramento sincrono istantaneo se l'utente attivo è protetto
+  if (!isUserUnlocked(activeUser)) {
+    maskDashboardForLock();
+  }
+
   populateUserSelect();
 
   // Cambio utente
@@ -679,6 +713,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     recognition.interimResults = false;
 
     const startRecording = () => {
+      if (!isUserUnlocked(activeUser)) {
+        alert("Devi prima sbloccare il profilo!");
+        requestUserSwitch(activeUser);
+        return;
+      }
       try {
         recognition.start();
         voiceBtn.classList.add('recording');
@@ -710,10 +749,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('voice')) {
-      startRecording();
-      const triggerOnce = () => { startRecording(); };
-      window.addEventListener('click', triggerOnce, { once: true });
-      window.addEventListener('touchstart', triggerOnce, { once: true });
+      if (isUserUnlocked(activeUser)) {
+        startRecording();
+        const triggerOnce = () => { startRecording(); };
+        window.addEventListener('click', triggerOnce, { once: true });
+        window.addEventListener('touchstart', triggerOnce, { once: true });
+      }
     }
   } else {
     voiceBtn.style.display = 'none';
@@ -725,16 +766,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (mealParam && mealParam.trim() !== '') {
     const decodedMeal = decodeURIComponent(mealParam).trim();
     document.getElementById('mealTextInput').value = decodedMeal;
-    handleMealSubmission(decodedMeal);
+    if (isUserUnlocked(activeUser)) {
+      handleMealSubmission(decodedMeal);
+    }
     window.history.replaceState({}, document.title, window.location.pathname);
   }
 
-  // 1. Sincronizza i profili dal cloud
-  await syncProfilesFromCloud();
-
-  // 2. Verifica se il profilo attivo necessita di autenticazione all'avvio
+  // 2. Richiedi l'autenticazione all'avvio PRIMA di qualsiasi caricamento o rendering
   const unlocked = await requestUserSwitch(activeUser);
   if (unlocked) {
+    await syncProfilesFromCloud();
     renderDashboard();
     syncFromGoogleSheets();
   }
