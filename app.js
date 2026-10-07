@@ -75,8 +75,8 @@ async function registerBiometric(username) {
           displayName: username
         },
         pubKeyCredParams: [
-          { alg: -7, type: "public-key" },  // ES256
-          { alg: -257, type: "public-key" } // RS256
+          { alg: -7, type: "public-key" },
+          { alg: -257, type: "public-key" }
         ],
         authenticatorSelection: {
           authenticatorAttachment: "platform",
@@ -311,6 +311,17 @@ function deleteMeal(id) {
   syncToGoogleSheets("syncAll", { meals: meals });
 }
 
+// --- MASCHERAMENTO DASHBOARD IN CASO DI BLOCCO ---
+function maskDashboardForLock() {
+  document.getElementById('totalCalories').innerText = "---";
+  document.getElementById('totalProtein').innerText = "-";
+  document.getElementById('totalCarbs').innerText = "-";
+  document.getElementById('totalFat').innerText = "-";
+  document.getElementById('targetTdee').innerText = "---";
+  document.getElementById('userBmrVal').innerText = "---";
+  document.getElementById('mealsList').innerHTML = '<div style="text-align:center; color: var(--text-muted); padding: 2rem;">🔒 Profilo bloccato. Autenticati per accedere ai dati.</div>';
+}
+
 // --- ESECUZIONE API GEMINI CON FALLBACK AUTOMATICO ---
 async function callGeminiSingleModel(modelName, inputText, nextSnackLabel) {
   const apiKey = getApiKey();
@@ -442,21 +453,24 @@ async function requestUserSwitch(targetUser) {
   // Se non c'è password o già sbloccato in sessione
   if (!profile || !profile.password || sessionStorage.getItem(`unlocked_${targetUser}`)) {
     switchUser(targetUser);
-    return;
+    return true;
   }
 
-  // Controllo presenza registrazione biometria per l'utente su questo dispositivo
+  // Maschera i dati finché non c'è l'autenticazione
+  maskDashboardForLock();
+
+  // Controllo presenza registrazione biometria
   const hasBio = !!localStorage.getItem(`bio_cred_${targetUser.trim().toLowerCase()}`);
   if (hasBio && await isBiometricSupported()) {
     const bioOk = await verifyBiometric(targetUser);
     if (bioOk) {
       sessionStorage.setItem(`unlocked_${targetUser}`, "true");
       switchUser(targetUser);
-      return;
+      return true;
     }
   }
 
-  // Se la biometria non è configurata, fallisce o viene annullata -> Modal Password
+  // Fallback a modal password se biometria fallisce o non è presente
   pendingUserSwitch = targetUser;
   document.getElementById('unlockModalText').innerText = `Inserisci la password per accedere al profilo "${targetUser}".`;
   document.getElementById('unlockPasswordInput').value = "";
@@ -470,6 +484,7 @@ async function requestUserSwitch(targetUser) {
   }
 
   document.getElementById('unlockModal').style.display = "flex";
+  return false;
 }
 
 function openProfileModal(isNew = false) {
@@ -507,7 +522,7 @@ function openProfileModal(isNew = false) {
   modal.style.display = "flex";
 }
 
-// --- INIZIALIZZAZIONE ---
+// --- INIZIALIZZAZIONE BLOCCANTE ALL'AVVIO ---
 document.addEventListener('DOMContentLoaded', async () => {
   populateUserSelect();
 
@@ -714,7 +729,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.history.replaceState({}, document.title, window.location.pathname);
   }
 
+  // 1. Sincronizza i profili dal cloud
   await syncProfilesFromCloud();
-  renderDashboard();
-  syncFromGoogleSheets();
+
+  // 2. Verifica se il profilo attivo necessita di autenticazione all'avvio
+  const unlocked = await requestUserSwitch(activeUser);
+  if (unlocked) {
+    renderDashboard();
+    syncFromGoogleSheets();
+  }
 });
