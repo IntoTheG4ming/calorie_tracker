@@ -1,4 +1,3 @@
-```markdown
 # 🥗 Voice Calorie Tracker PWA
 
 ![PWA Ready](https://img.shields.io/badge/PWA-Ready-10b981?style=flat-square&logo=pwa)
