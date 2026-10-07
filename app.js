@@ -15,6 +15,15 @@ const ACTIVITY_MULTIPLIERS = {
   active: 1.725
 };
 
+const AVATAR_COLORS = [
+  'linear-gradient(135deg, #6366f1, #a855f7)',
+  'linear-gradient(135deg, #10b981, #059669)',
+  'linear-gradient(135deg, #f59e0b, #d97706)',
+  'linear-gradient(135deg, #ec4899, #be185d)',
+  'linear-gradient(135deg, #3b82f6, #1d4ed8)',
+  'linear-gradient(135deg, #8b5cf6, #6d28d9)'
+];
+
 // --- GESTIONE PROFILI ---
 const FALLBACK_PROFILES = {
   "Emanuele": {
@@ -56,6 +65,25 @@ function calculateMetricsFor(profile) {
   return { bmr: Math.round(bmr), tdee };
 }
 
+// --- CONVERSIONE BUFFER WEBAUTHN PER PERSISTENZA PERMANENTE ---
+function bufferToBase64(buffer) {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return window.btoa(binary);
+}
+
+function base64ToBuffer(base64) {
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
 // --- SUPPORTO ED ESECUZIONE WEBAUTHN (BIOMETRIA) ---
 async function isBiometricSupported() {
   return window.PublicKeyCredential &&
@@ -95,8 +123,8 @@ async function registerBiometric(username) {
     });
 
     if (credential) {
-      const rawId = btoa(String.fromCharCode(...new Uint8Array(credential.rawId)));
-      localStorage.setItem(`bio_cred_${username.trim().toLowerCase()}`, rawId);
+      const credIdBase64 = bufferToBase64(credential.rawId);
+      localStorage.setItem(`bio_cred_${username.trim().toLowerCase()}`, credIdBase64);
       return true;
     }
   } catch (err) {
@@ -115,9 +143,9 @@ async function verifyBiometric(username) {
 
     const allowCredentials = [];
     if (rawIdBase64) {
-      const rawId = Uint8Array.from(atob(rawIdBase64), c => c.charCodeAt(0));
+      const rawIdBuffer = base64ToBuffer(rawIdBase64);
       allowCredentials.push({
-        id: rawId,
+        id: rawIdBuffer,
         type: "public-key"
       });
     }
@@ -169,13 +197,8 @@ async function syncProfilesFromCloud() {
     const result = await res.json();
     if (result.status === "success" && result.data && Object.keys(result.data).length > 0) {
       saveProfilesLocally(result.data);
-      
-      const userList = Object.keys(result.data);
-      if (!userList.includes(activeUser)) {
-        activeUser = userList[0];
-        localStorage.setItem('cal_active_user', activeUser);
-      }
       populateUserSelect();
+      renderProfilesGrid();
     }
   } catch (err) {
     console.warn("Impossibile caricare i profili dal cloud:", err);
@@ -338,6 +361,57 @@ function maskDashboardForLock() {
   document.getElementById('mealsList').innerHTML = '<div style="text-align:center; color: var(--text-muted); padding: 2rem;">🔒 Profilo bloccato. Autenticati per accedere ai dati.</div>';
 }
 
+// --- RENDERING GRID LANDING SCREEN (STILE NETFLIX) ---
+function renderProfilesGrid() {
+  const profiles = getProfiles();
+  const grid = document.getElementById('profilesGrid');
+  if (!grid) return;
+
+  grid.innerHTML = '';
+  const userNames = Object.keys(profiles);
+
+  userNames.forEach((name, idx) => {
+    const p = profiles[name];
+    const card = document.createElement('div');
+    card.className = 'profile-card';
+
+    const bgGradient = AVATAR_COLORS[idx % AVATAR_COLORS.length];
+    const firstLetter = name.charAt(0).toUpperCase();
+    const hasPass = !!p.password;
+
+    card.innerHTML = `
+      <div class="profile-avatar" style="background: ${bgGradient};">
+        ${firstLetter}
+        ${hasPass ? '<div class="profile-badge-lock">🔒</div>' : ''}
+      </div>
+      <span class="profile-name">${name}</span>
+    `;
+
+    card.addEventListener('click', () => {
+      selectProfileFromLanding(name);
+    });
+
+    grid.appendChild(card);
+  });
+}
+
+async function selectProfileFromLanding(targetUser) {
+  activeUser = targetUser;
+  localStorage.setItem('cal_active_user', activeUser);
+  populateUserSelect();
+
+  const unlocked = await requestUserSwitch(targetUser);
+  if (unlocked) {
+    onAuthenticationSuccess();
+  }
+}
+
+function onAuthenticationSuccess() {
+  document.getElementById('landingScreen').style.display = 'none';
+  renderDashboard();
+  syncFromGoogleSheets();
+}
+
 // --- ESECUZIONE API GEMINI CON FALLBACK AUTOMATICO ---
 async function callGeminiSingleModel(modelName, inputText, nextSnackLabel) {
   const apiKey = getApiKey();
@@ -463,24 +537,19 @@ function switchUser(targetUser) {
   activeUser = targetUser;
   localStorage.setItem('cal_active_user', activeUser);
   populateUserSelect();
-  renderDashboard();
-  syncFromGoogleSheets();
 }
 
 async function requestUserSwitch(targetUser) {
   const profiles = getProfiles();
   const profile = profiles[targetUser];
 
-  // Se non c'è password o già sbloccato in sessione
   if (!profile || !profile.password || sessionStorage.getItem(`unlocked_${targetUser}`)) {
     switchUser(targetUser);
     return true;
   }
 
-  // Maschera i dati finché non c'è l'autenticazione
   maskDashboardForLock();
 
-  // Imposta lo stato di attesa della modal
   pendingUserSwitch = targetUser;
   document.getElementById('unlockModalText').innerText = `Inserisci la password per accedere al profilo "${targetUser}".`;
   document.getElementById('unlockPasswordInput').value = "";
@@ -496,7 +565,6 @@ async function requestUserSwitch(targetUser) {
 
   document.getElementById('unlockModal').style.display = "flex";
 
-  // Tenta sblocco biometrico automatico se registrato
   if (hasBio && await isBiometricSupported()) {
     const bioOk = await verifyBiometric(targetUser);
     if (bioOk) {
@@ -551,21 +619,40 @@ function openProfileModal(isNew = false) {
   modal.style.display = "flex";
 }
 
-// --- INIZIALIZZAZIONE BLOCCANTE ALL'AVVIO ---
+// --- INIZIALIZZAZIONE BLOCCANTE E CARICAMENTO DIFFERITO ---
 document.addEventListener('DOMContentLoaded', async () => {
-  // 1. Mascheramento sincrono istantaneo se l'utente attivo è protetto
-  if (!isUserUnlocked(activeUser)) {
-    maskDashboardForLock();
-  }
+  // Mascheramento sincrono
+  maskDashboardForLock();
 
+  // Rendering iniziale landing grid e selettore
   populateUserSelect();
+  renderProfilesGrid();
 
-  // Cambio utente
+  // Mostra sempre la Landing Screen all'apertura/ricaricamento
+  document.getElementById('landingScreen').style.display = 'flex';
+
+  // Gestione pulsante Aggiungi Utente da Landing Page
+  document.getElementById('landingAddUserBtn').addEventListener('click', () => {
+    openProfileModal(true);
+  });
+
+  // Gestione pulsante Esci / Blocca
+  document.getElementById('lockAppBtn').addEventListener('click', () => {
+    sessionStorage.clear();
+    maskDashboardForLock();
+    renderProfilesGrid();
+    document.getElementById('landingScreen').style.display = 'flex';
+  });
+
+  // Cambio utente da select
   const userSelect = document.getElementById('userSelect');
-  userSelect.addEventListener('change', (e) => {
+  userSelect.addEventListener('change', async (e) => {
     const targetUser = e.target.value;
     userSelect.value = activeUser;
-    requestUserSwitch(targetUser);
+    const unlocked = await requestUserSwitch(targetUser);
+    if (unlocked) {
+      onAuthenticationSuccess();
+    }
   });
 
   // Modal Sblocco Password / Biometria
@@ -583,6 +670,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('unlockModal').style.display = 'none';
       switchUser(pendingUserSwitch);
       pendingUserSwitch = null;
+      onAuthenticationSuccess();
     } else {
       document.getElementById('unlockError').innerText = "Riconoscimento biometrico non riuscito. Inserisci la password.";
     }
@@ -599,6 +687,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('unlockModal').style.display = 'none';
       switchUser(pendingUserSwitch);
       pendingUserSwitch = null;
+      onAuthenticationSuccess();
     } else {
       document.getElementById('unlockError').innerText = "Password errata. Riprova.";
     }
@@ -617,8 +706,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const ok = await registerBiometric(targetName);
     const bioStatusText = document.getElementById('bioStatusText');
     if (ok) {
-      bioStatusText.innerText = "Biometria registrata con successo!";
+      bioStatusText.innerText = "Biometria registrata con successo su questo dispositivo!";
       bioStatusText.style.color = "var(--accent)";
+      populateUserSelect();
+      renderProfilesGrid();
     } else {
       bioStatusText.innerText = "Registrazione biometrica fallita o annullata.";
       bioStatusText.style.color = "var(--danger)";
@@ -659,9 +750,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     saveProfilesLocally(profiles);
     saveProfilesToCloud(profiles);
     populateUserSelect();
+    renderProfilesGrid();
     document.getElementById('userModal').style.display = 'none';
-    renderDashboard();
-    syncFromGoogleSheets();
+
+    onAuthenticationSuccess();
   });
 
   // Modal Modelli AI
@@ -685,7 +777,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     datePicker.value = currentDate;
     datePicker.addEventListener('change', (e) => {
       currentDate = e.target.value;
-      renderDashboard();
+      if (isUserUnlocked(activeUser)) {
+        renderDashboard();
+      }
     });
   }
 
@@ -746,37 +840,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('inputStatus').innerText = "Errore microfono: " + event.error;
       document.getElementById('inputStatus').style.color = "var(--danger)";
     };
-
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('voice')) {
-      if (isUserUnlocked(activeUser)) {
-        startRecording();
-        const triggerOnce = () => { startRecording(); };
-        window.addEventListener('click', triggerOnce, { once: true });
-        window.addEventListener('touchstart', triggerOnce, { once: true });
-      }
-    }
   } else {
     voiceBtn.style.display = 'none';
   }
 
-  // Gestione URL param ?meal=... da iPad/Shortcut
-  const urlParams = new URLSearchParams(window.location.search);
-  const mealParam = urlParams.get('meal');
-  if (mealParam && mealParam.trim() !== '') {
-    const decodedMeal = decodeURIComponent(mealParam).trim();
-    document.getElementById('mealTextInput').value = decodedMeal;
-    if (isUserUnlocked(activeUser)) {
-      handleMealSubmission(decodedMeal);
-    }
-    window.history.replaceState({}, document.title, window.location.pathname);
-  }
-
-  // 2. Richiedi l'autenticazione all'avvio PRIMA di qualsiasi caricamento o rendering
-  const unlocked = await requestUserSwitch(activeUser);
-  if (unlocked) {
-    await syncProfilesFromCloud();
-    renderDashboard();
-    syncFromGoogleSheets();
-  }
+  // Sincronizza metadata profili in background per la landing page
+  await syncProfilesFromCloud();
 });

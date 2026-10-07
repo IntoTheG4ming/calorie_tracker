@@ -89,8 +89,106 @@
     .delete-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1rem; }
     .delete-btn:hover { color: var(--danger); }
 
-    /* Modali */
-    .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
+    /* LANDING SCREEN STILE NETFLIX */
+    .landing-screen {
+      position: fixed;
+      inset: 0;
+      background-color: #0f172a;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      overflow-y: auto;
+    }
+    .landing-content {
+      text-align: center;
+      max-width: 520px;
+      width: 100%;
+    }
+    .landing-title {
+      font-size: 1.8rem;
+      font-weight: 800;
+      color: #f8fafc;
+      margin-bottom: 2rem;
+      letter-spacing: -0.02em;
+    }
+    .profiles-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.5rem;
+      justify-content: center;
+      margin-bottom: 2.5rem;
+    }
+    .profile-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      cursor: pointer;
+      background: transparent;
+      border: none;
+      color: inherit;
+      transition: transform 0.2s ease, opacity 0.2s ease;
+    }
+    .profile-card:hover {
+      transform: scale(1.08);
+    }
+    .profile-avatar {
+      width: 96px;
+      height: 96px;
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2.4rem;
+      font-weight: 800;
+      color: #ffffff;
+      box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.6);
+      position: relative;
+      border: 3px solid transparent;
+      transition: border-color 0.2s ease;
+    }
+    .profile-card:hover .profile-avatar {
+      border-color: #f8fafc;
+    }
+    .profile-badge-lock {
+      position: absolute;
+      top: -8px;
+      right: -8px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 50%;
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.8rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+    }
+    .profile-name {
+      margin-top: 0.75rem;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #cbd5e1;
+    }
+    .btn-landing-add {
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #f8fafc;
+      padding: 0.75rem 1.5rem;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-landing-add:hover {
+      background: #334155;
+    }
+
+    /* MODALI */
+    .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 10000; align-items: center; justify-content: center; }
     .modal-content { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; width: 90%; max-width: 440px; padding: 1.5rem; }
     .modal-content h2 { font-size: 1.1rem; margin-bottom: 1rem; }
     .form-group { margin-bottom: 0.8rem; display: flex; flex-direction: column; gap: 4px; }
@@ -103,13 +201,24 @@
   </style>
 </head>
 <body>
+
+  <!-- LANDING PAGE SELEZIONE PROFILO (STILE NETFLIX) -->
+  <div id="landingScreen" class="landing-screen">
+    <div class="landing-content">
+      <h1 class="landing-title">Chi sta tracciando?</h1>
+      <div id="profilesGrid" class="profiles-grid"></div>
+      <button id="landingAddUserBtn" class="btn-landing-add">➕ Aggiungi Profilo</button>
+    </div>
+  </div>
+
   <header>
     <div>
       <h1>Calorie Tracker</h1>
-      <span class="badge">v1.8.2</span>
+      <span class="badge">v1.9.0</span>
     </div>
     <div class="header-actions">
       <button id="openAiModalBtn" class="btn-icon" title="Impostazioni Modelli AI">🤖 Modelli AI</button>
+      <button id="lockAppBtn" class="btn-icon" title="Blocca App / Cambia Profilo">🔒 Esci</button>
       <span id="syncStatus">Cloud attivo</span>
     </div>
   </header>
@@ -128,10 +237,10 @@
   <section class="dashboard-card">
     <div class="calorie-summary">
       <div>
-        <span class="calorie-digits" id="totalCalories">0</span>
-        <span class="target-digits">/ <span id="targetTdee">0</span> kcal TDEE</span>
+        <span class="calorie-digits" id="totalCalories">---</span>
+        <span class="target-digits">/ <span id="targetTdee">---</span> kcal TDEE</span>
       </div>
-      <span class="target-digits">BMR: <span id="userBmrVal">0</span> kcal</span>
+      <span class="target-digits">BMR: <span id="userBmrVal">---</span> kcal</span>
     </div>
 
     <div class="progress-container">
@@ -142,15 +251,15 @@
     <div class="macro-grid">
       <div class="macro-item">
         <div class="macro-label">Proteine</div>
-        <div class="macro-val" id="totalProtein" style="color: #60a5fa;">0g</div>
+        <div class="macro-val" id="totalProtein" style="color: #60a5fa;">-</div>
       </div>
       <div class="macro-item">
         <div class="macro-label">Carboidrati</div>
-        <div class="macro-val" id="totalCarbs" style="color: #facc15;">0g</div>
+        <div class="macro-val" id="totalCarbs" style="color: #facc15;">-</div>
       </div>
       <div class="macro-item">
         <div class="macro-label">Grassi</div>
-        <div class="macro-val" id="totalFat" style="color: #f87171;">0g</div>
+        <div class="macro-val" id="totalFat" style="color: #f87171;">-</div>
       </div>
     </div>
   </section>
@@ -217,7 +326,7 @@
     </div>
   </div>
 
-  <!-- Modal Sblocco Profilo (Password / Biometria) -->
+  <!-- Modal Sblocco Profilo -->
   <div id="unlockModal" class="modal">
     <div class="modal-content">
       <h2>Profilo Protetto</h2>
@@ -272,9 +381,30 @@
 
   <script src="./app.js"></script>
   <script>
+    // RIPRISTINO RILEVAMENTO E AGGIORNAMENTO AUTOMATICO SERVICE WORKER
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').catch(console.error);
+        navigator.serviceWorker.register('./sw.js').then((registration) => {
+          registration.addEventListener('updatefound', () => {
+            const newWorker = registration.installing;
+            if (newWorker) {
+              newWorker.addEventListener('statechange', () => {
+                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                  console.log('Nuova versione SW installata. Ricarico l\'app...');
+                  window.location.reload();
+                }
+              });
+            }
+          });
+        }).catch(console.error);
+
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (!refreshing) {
+            refreshing = true;
+            window.location.reload();
+          }
+        });
       });
     }
   </script>
