@@ -1,15 +1,38 @@
 {
-    "name": "Voice Calorie Tracker",
-    "short_name": "CalTracker",
-    "start_url": "./index.html",
-    "display": "standalone",
-    "background_color": "#090d16",
-    "theme_color": "#090d16",
-    "icons": [
-      {
-        "src": "https://cdn-icons-png.flaticon.com/512/1046/1046784.png",
-        "sizes": "512x512",
-        "type": "image/png"
-      }
-    ]
-  }
+  "name": "Voice Calorie Tracker",
+  "short_name": "CalorieTracker",
+  "description": "Tracciamento calorie e macronutrienti con IA e dettatura vocale",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/1046/1046784.png",
+      "sizes": "511x511",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://cdn-icons-png.flaticon.com/192/1046/1046784.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "https://placehold.co/1280x720/1e293b/f8fafc.png?text=Calorie+Tracker+Desktop",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Dashboard Calorie Desktop"
+    },
+    {
+      "src": "https://placehold.co/540x960/1e293b/f8fafc.png?text=Calorie+Tracker+Mobile",
+      "sizes": "540x960",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Dashboard Calorie Mobile"
+    }
+  ]
+}
