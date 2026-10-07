@@ -49,6 +49,29 @@ function saveProfilesLocally(profiles) {
 let activeUser = localStorage.getItem('cal_active_user') || "Emanuele";
 let pendingUserSwitch = null;
 
+// --- VERIFICA SE PROFILO È PROTETTO ED È SBLOCCATO ---
+function isUserProtected(username) {
+  const profiles = getProfiles();
+  const profile = profiles[username];
+  if (!profile) return false;
+  const hasPass = !!profile.password;
+  const hasBio = !!localStorage.getItem(`bio_cred_${username.trim().toLowerCase()}`) || !!profile.bioCred;
+  return hasPass || hasBio;
+}
+
+function isUserUnlocked(username) {
+  if (!isUserProtected(username)) return true;
+  return sessionStorage.getItem(`unlocked_${username}`) === "true";
+}
+
+function getUserSessionPassword(username) {
+  const profiles = getProfiles();
+  const profile = profiles[username];
+  if (!profile) return "";
+  if (profile.password) return profile.password;
+  return `bio_protected_${username.trim().toLowerCase()}`;
+}
+
 // --- CRITTOGRAFIA ZERO-KNOWLEDGE (WEB CRYPTO API AES-GCM) ---
 function bufferToBase64(buffer) {
   let binary = '';
@@ -126,13 +149,8 @@ async function decryptData(cipherText, password, username) {
       parsed = cipherText;
     }
 
-    // Retrocompatibilità: se i dati non sono un oggetto cifrato (cipher + iv), restituiscili direttamente
-    if (Array.isArray(parsed)) {
-      return parsed;
-    }
-    if (!parsed || !parsed.cipher || !parsed.iv) {
-      return parsed || [];
-    }
+    if (Array.isArray(parsed)) return parsed;
+    if (!parsed || !parsed.cipher || !parsed.iv) return parsed || [];
 
     const key = await deriveCryptoKey(password, username);
     const decrypted = await window.crypto.subtle.decrypt(
@@ -143,24 +161,9 @@ async function decryptData(cipherText, password, username) {
     const dec = new TextDecoder();
     return JSON.parse(dec.decode(decrypted));
   } catch (err) {
-    console.warn("Impossibile decifrare i dati (chiave errata o formato non valido):", err);
+    console.warn("Impossibile decifrare i dati:", err);
     return [];
   }
-}
-
-// --- VERIFICA STATO DI AUTENTICAZIONE UTENTE ---
-function isUserUnlocked(username) {
-  const profiles = getProfiles();
-  const profile = profiles[username];
-  if (!profile || !profile.password) return true;
-  return sessionStorage.getItem(`unlocked_${username}`) === "true";
-}
-
-function getUserSessionPassword(username) {
-  const profiles = getProfiles();
-  const profile = profiles[username];
-  if (!profile || !profile.password) return "";
-  return sessionStorage.getItem(`pass_${username}`) || profile.password || "";
 }
 
 function calculateMetricsFor(profile) {
@@ -181,7 +184,7 @@ async function isBiometricSupported() {
 
 async function registerBiometric(username) {
   if (!await isBiometricSupported()) {
-    alert("La biometria non è supportata su questo dispositivo o browser.");
+    alert("La biometria (Windows Hello / Touch ID) non è supportata su questo dispositivo o browser.");
     return false;
   }
   try {
@@ -214,7 +217,6 @@ async function registerBiometric(username) {
       const credIdBase64 = bufferToBase64(credential.rawId);
       localStorage.setItem(`bio_cred_${username.trim().toLowerCase()}`, credIdBase64);
       
-      // Salva la credenziale anche nel profilo cloud
       const profiles = getProfiles();
       if (profiles[username]) {
         profiles[username].bioCred = credIdBase64;
@@ -298,7 +300,6 @@ async function syncProfilesFromCloud() {
     if (result.status === "success" && result.data && Object.keys(result.data).length > 0) {
       saveProfilesLocally(result.data);
       
-      // Ripristina automaticamente i token biometrici in localStorage se presenti nel cloud
       Object.keys(result.data).forEach(uName => {
         const p = result.data[uName];
         if (p && p.bioCred) {
@@ -540,18 +541,17 @@ function renderProfilesGrid() {
   const userNames = Object.keys(profiles);
 
   userNames.forEach((name, idx) => {
-    const p = profiles[name];
     const card = document.createElement('div');
     card.className = 'profile-card';
 
     const bgGradient = AVATAR_COLORS[idx % AVATAR_COLORS.length];
     const firstLetter = name.charAt(0).toUpperCase();
-    const hasPass = !!p.password;
+    const isProtected = isUserProtected(name);
 
     card.innerHTML = `
       <div class="profile-avatar" style="background: ${bgGradient};">
         ${firstLetter}
-        ${hasPass ? '<div class="profile-badge-lock">🔒</div>' : ''}
+        ${isProtected ? '<div class="profile-badge-lock">🔒</div>' : ''}
       </div>
       <span class="profile-name">${name}</span>
     `;
@@ -694,9 +694,9 @@ function populateUserSelect() {
   Object.keys(profiles).forEach(user => {
     const opt = document.createElement('option');
     opt.value = user;
-    const hasPass = !!profiles[user].password;
+    const isProt = isUserProtected(user);
     const hasBio = !!localStorage.getItem(`bio_cred_${user.trim().toLowerCase()}`);
-    opt.textContent = user + (hasPass ? (hasBio ? " 🔒👆" : " 🔒") : "");
+    opt.textContent = user + (isProt ? (hasBio ? " 🔒👆" : " 🔒") : "");
     if (user.toLowerCase() === activeUser.toLowerCase()) opt.selected = true;
     userSelect.appendChild(opt);
   });
@@ -712,10 +712,9 @@ async function requestUserSwitch(targetUser) {
   const profiles = getProfiles();
   const profile = profiles[targetUser];
 
-  if (!profile || !profile.password || sessionStorage.getItem(`unlocked_${targetUser}`)) {
-    if (profile && profile.password) {
-      sessionStorage.setItem(`pass_${targetUser}`, profile.password);
-    }
+  if (!profile) return false;
+
+  if (!isUserProtected(targetUser) || sessionStorage.getItem(`unlocked_${targetUser}`) === "true") {
     switchUser(targetUser);
     return true;
   }
@@ -723,11 +722,19 @@ async function requestUserSwitch(targetUser) {
   maskDashboardForLock();
 
   pendingUserSwitch = targetUser;
-  document.getElementById('unlockModalText').innerText = `Inserisci la password per accedere al profilo "${targetUser}".`;
+  document.getElementById('unlockModalText').innerText = `Autenticati per accedere al profilo "${targetUser}".`;
   document.getElementById('unlockPasswordInput').value = "";
   document.getElementById('unlockError').innerText = "";
-  
-  const hasBio = !!localStorage.getItem(`bio_cred_${targetUser.trim().toLowerCase()}`);
+
+  const hasPass = !!profile.password;
+  const passGroup = document.getElementById('unlockPasswordGroup');
+  if (hasPass) {
+    passGroup.style.display = "flex";
+  } else {
+    passGroup.style.display = "none";
+  }
+
+  const hasBio = !!localStorage.getItem(`bio_cred_${targetUser.trim().toLowerCase()}`) || !!profile.bioCred;
   const tryBioBtn = document.getElementById('tryBioBtn');
   if (hasBio && await isBiometricSupported()) {
     tryBioBtn.style.display = "block";
@@ -736,19 +743,6 @@ async function requestUserSwitch(targetUser) {
   }
 
   document.getElementById('unlockModal').style.display = "flex";
-
-  if (hasBio && await isBiometricSupported()) {
-    const bioOk = await verifyBiometric(targetUser);
-    if (bioOk) {
-      sessionStorage.setItem(`unlocked_${targetUser}`, "true");
-      sessionStorage.setItem(`pass_${targetUser}`, profile.password || "");
-      document.getElementById('unlockModal').style.display = 'none';
-      switchUser(targetUser);
-      pendingUserSwitch = null;
-      return true;
-    }
-  }
-
   return false;
 }
 
@@ -835,20 +829,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     populateUserSelect();
   });
 
+  // AVVIO DIRETTO DI WINDOWS HELLO SU CLICK DELL'UTENTE
   document.getElementById('tryBioBtn').addEventListener('click', async () => {
     if (!pendingUserSwitch) return;
+    const errorEl = document.getElementById('unlockError');
+    errorEl.innerText = "Avvio di Windows Hello / Biometria...";
+    errorEl.style.color = "#38bdf8";
+
     const bioOk = await verifyBiometric(pendingUserSwitch);
     if (bioOk) {
       const profiles = getProfiles();
       const profile = profiles[pendingUserSwitch];
       sessionStorage.setItem(`unlocked_${pendingUserSwitch}`, "true");
-      sessionStorage.setItem(`pass_${pendingUserSwitch}`, profile.password || "");
+      sessionStorage.setItem(`pass_${pendingUserSwitch}`, profile ? profile.password || "" : "");
       document.getElementById('unlockModal').style.display = 'none';
       switchUser(pendingUserSwitch);
       pendingUserSwitch = null;
       onAuthenticationSuccess();
     } else {
-      document.getElementById('unlockError').innerText = "Riconoscimento biometrico non riuscito. Inserisci la password.";
+      errorEl.innerText = "Riconoscimento biometrico annullato o fallito.";
+      errorEl.style.color = "var(--danger)";
     }
   });
 
@@ -858,7 +858,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const profile = profiles[pendingUserSwitch];
     const enteredPass = document.getElementById('unlockPasswordInput').value.trim();
 
-    if (profile && profile.password === enteredPass) {
+    if (profile && profile.password && profile.password === enteredPass) {
       sessionStorage.setItem(`unlocked_${pendingUserSwitch}`, "true");
       sessionStorage.setItem(`pass_${pendingUserSwitch}`, enteredPass);
       document.getElementById('unlockModal').style.display = 'none';
@@ -867,6 +867,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       onAuthenticationSuccess();
     } else {
       document.getElementById('unlockError').innerText = "Password errata. Riprova.";
+      document.getElementById('unlockError').style.color = "var(--danger)";
     }
   });
 
@@ -898,7 +899,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('userModal').style.display = 'none';
   });
 
-  document.getElementById('saveProfileBtn').addEventListener('click', () => {
+  // SALVATAGGIO CON VINCOLO DI AUTENTICAZIONE OBBLIGATORIA
+  document.getElementById('saveProfileBtn').addEventListener('click', async () => {
     const profiles = getProfiles();
     const isNew = document.getElementById('userNameGroup').style.display !== "none";
     let targetName = activeUser;
@@ -907,11 +909,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       const enteredName = document.getElementById('profName').value.trim();
       if (!enteredName) return alert("Inserisci un nome utente valido.");
       targetName = enteredName;
-      activeUser = targetName;
-      localStorage.setItem('cal_active_user', activeUser);
     }
 
     const enteredPass = document.getElementById('profPassword').value.trim();
+    const hasBio = !!localStorage.getItem(`bio_cred_${targetName.trim().toLowerCase()}`);
+
+    if (!enteredPass && !hasBio) {
+      alert("⚠️ Per salvare il profilo è OBBLIGATORIO impostare almeno un metodo di autenticazione:\n\n1. Inserisci una Password\nOPPUR3\n2. Registra la Biometria (Windows Hello) con il pulsante dedicato.");
+      return;
+    }
+
+    if (isNew) {
+      activeUser = targetName;
+      localStorage.setItem('cal_active_user', activeUser);
+    }
 
     profiles[targetName] = {
       gender: document.getElementById('profGender').value,
@@ -920,14 +931,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       weightKg: Number(document.getElementById('profWeight').value) || 70,
       activityLevel: document.getElementById('profActivityLevel').value,
       password: enteredPass,
-      bioCred: profiles[targetName]?.bioCred || ""
+      bioCred: localStorage.getItem(`bio_cred_${targetName.trim().toLowerCase()}`) || profiles[targetName]?.bioCred || ""
     };
 
     sessionStorage.setItem(`unlocked_${targetName}`, "true");
     sessionStorage.setItem(`pass_${targetName}`, enteredPass);
 
     saveProfilesLocally(profiles);
-    saveProfilesToCloud(profiles);
+    await saveProfilesToCloud(profiles);
     populateUserSelect();
     renderProfilesGrid();
     document.getElementById('userModal').style.display = 'none';

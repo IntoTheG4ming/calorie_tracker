@@ -224,7 +224,7 @@
   <header>
     <div>
       <h1>Calorie Tracker</h1>
-      <span class="badge">v1.9.2</span>
+      <span class="badge">v1.9.3</span>
     </div>
     <div class="header-actions">
       <button id="openAiModalBtn" class="btn-icon" title="Impostazioni Modelli AI">🤖 Modelli AI</button>
@@ -322,12 +322,15 @@
         </select>
       </div>
       <div class="form-group">
-        <label>Password di Protezione (opzionale)</label>
-        <input type="password" id="profPassword" placeholder="Lascia vuoto per nessuna password">
+        <label>Password di Protezione</label>
+        <input type="password" id="profPassword" placeholder="Inserisci password">
       </div>
       <div class="form-group" id="bioEnrollGroup" style="margin-top: 8px;">
-        <button type="button" id="enrollBioBtn" class="btn-icon" style="padding: 0.6rem; text-align: center;">👆 Registra Biometria su questo dispositivo</button>
+        <button type="button" id="enrollBioBtn" class="btn-icon" style="padding: 0.6rem; text-align: center; background: #334155;">👆 Registra Windows Hello / Biometria</button>
         <span id="bioStatusText" style="font-size: 0.75rem; color: var(--text-muted); text-align: center; margin-top: 2px;"></span>
+      </div>
+      <div style="font-size: 0.75rem; color: #f59e0b; margin-top: 6px; text-align: center;">
+        * È obbligatorio impostare una Password o registrare la Biometria.
       </div>
       <div class="modal-actions" style="justify-content: space-between;">
         <button id="deleteProfileBtn" class="btn-delete-profile" style="display: none;">🗑️ Elimina</button>
@@ -343,13 +346,13 @@
   <div id="unlockModal" class="modal">
     <div class="modal-content">
       <h2>Profilo Protetto</h2>
-      <p id="unlockModalText" style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">Inserisci la password o usa la biometria per accedere.</p>
+      <p id="unlockModalText" style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">Seleziona il metodo per accedere al profilo.</p>
       
-      <button type="button" id="tryBioBtn" style="background:#334155; border:1px solid var(--border); color:var(--text); width: 100%; margin-bottom: 1rem; padding: 0.75rem; border-radius:8px; cursor:pointer; font-weight: 600; display: none;">
-        👆 Sblocca con Biometria (Touch/Face ID)
+      <button type="button" id="tryBioBtn" style="background:var(--accent); border:none; color:#0f172a; width: 100%; margin-bottom: 1rem; padding: 0.8rem; border-radius:8px; cursor:pointer; font-weight: 700; font-size: 0.95rem; display: none;">
+        👆 Sblocca con Windows Hello / Biometria
       </button>
 
-      <div class="form-group">
+      <div class="form-group" id="unlockPasswordGroup">
         <label>Password</label>
         <input type="password" id="unlockPasswordInput" placeholder="Inserisci password">
       </div>

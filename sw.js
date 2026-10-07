@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cal-tracker-v1.9.1';
+const CACHE_NAME = 'cal-tracker-v1.9.3';
 const ASSETS = [
   './',
   './index.html',
@@ -26,6 +26,12 @@ self.addEventListener('activate', (e) => {
     })
   );
   self.clients.claim();
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener('fetch', (e) => {
