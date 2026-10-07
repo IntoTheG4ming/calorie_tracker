@@ -1,7 +1,4 @@
-Ecco il codice markdown completo del file `README.md` da copiare e incollare direttamente:
-
-```markdown
-# 🥗 Voice Calorie Tracker PWA (v1.9.1)
+# 🥗 Voice Calorie Tracker PWA (v1.9.2)
 
 ![PWA Ready](https://img.shields.io/badge/PWA-Ready-10b981?style=flat-square&logo=pwa)
 ![Gemini AI](https://img.shields.io/badge/AI-Gemini%203.6%20Flash-8e44ad?style=flat-square&logo=google)
@@ -197,6 +194,3 @@ Puoi registrare un pasto a voce tramite Siri o widget della schermata Home crean
 
 Questo progetto è distribuito sotto licenza **MIT**. Libero per uso personale e modifiche.
 
-```
-
----
