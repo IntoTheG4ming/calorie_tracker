@@ -184,7 +184,7 @@ async function isBiometricSupported() {
 
 async function registerBiometric(username) {
   if (!await isBiometricSupported()) {
-    alert("La biometria (Windows Hello / Touch ID) non è supportata su questo dispositivo o browser.");
+    alert("La biometria non è supportata su questo dispositivo o browser.");
     return false;
   }
   try {
@@ -267,8 +267,36 @@ async function verifyBiometric(username) {
   }
 }
 
-// --- GESTIONE STATO PASTI CON CRITTOGRAFIA ---
-let currentDate = new Date().toISOString().split('T')[0];
+// --- GESTIONE STATO PASTI CON CRITTOGRAFIA E AGGIORNAMENTO AUTOMATICO DATA ---
+function getTodayDateString() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+let currentDate = getTodayDateString();
+
+function checkAndRefreshDate() {
+  const today = getTodayDateString();
+  if (today !== currentDate) {
+    currentDate = today;
+    const datePicker = document.getElementById('datePicker');
+    if (datePicker) datePicker.value = currentDate;
+    if (isUserUnlocked(activeUser)) {
+      renderDashboard();
+    }
+  }
+}
+
+// Listener per aggiornare il giorno quando l'app torna visibile / in primo piano
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    checkAndRefreshDate();
+  }
+});
+window.addEventListener('focus', checkAndRefreshDate);
 
 function getStoredMealsKey() {
   return `calorie_tracker_meals_${activeUser.trim().toLowerCase()}`;
@@ -791,6 +819,7 @@ function openProfileModal(isNew = false) {
 
 // --- INIZIALIZZAZIONE BLOCCANTE E CARICAMENTO DIFFERITO ---
 document.addEventListener('DOMContentLoaded', async () => {
+  checkAndRefreshDate();
   maskDashboardForLock();
 
   populateUserSelect();
@@ -829,11 +858,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     populateUserSelect();
   });
 
-  // AVVIO DIRETTO DI WINDOWS HELLO SU CLICK DELL'UTENTE
+  // AVVIO DIRETTO DELLA BIOMETRIA SU CLICK DELL'UTENTE
   document.getElementById('tryBioBtn').addEventListener('click', async () => {
     if (!pendingUserSwitch) return;
     const errorEl = document.getElementById('unlockError');
-    errorEl.innerText = "Avvio di Windows Hello / Biometria...";
+    errorEl.innerText = "Avvio della biometria in corso...";
     errorEl.style.color = "#38bdf8";
 
     const bioOk = await verifyBiometric(pendingUserSwitch);
@@ -915,7 +944,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const hasBio = !!localStorage.getItem(`bio_cred_${targetName.trim().toLowerCase()}`);
 
     if (!enteredPass && !hasBio) {
-      alert("⚠️ Per salvare il profilo è OBBLIGATORIO impostare almeno un metodo di autenticazione:\n\n1. Inserisci una Password\nOPPUR3\n2. Registra la Biometria (Windows Hello) con il pulsante dedicato.");
+      alert("⚠️ Per salvare il profilo è OBBLIGATORIO impostare almeno un metodo di autenticazione:\n\n1. Inserisci una Password\nOPPURE\n2. Registra la Biometria con il pulsante dedicato.");
       return;
     }
 
