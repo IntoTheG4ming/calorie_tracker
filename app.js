@@ -68,6 +68,8 @@ function getUserSessionPassword(username) {
   const profiles = getProfiles();
   const profile = profiles[username];
   if (!profile) return "";
+  const sessPass = sessionStorage.getItem(`pass_${username}`);
+  if (sessPass !== null) return sessPass;
   if (profile.password) return profile.password;
   return `bio_protected_${username.trim().toLowerCase()}`;
 }
@@ -290,7 +292,6 @@ function checkAndRefreshDate() {
   }
 }
 
-// Listener per aggiornare il giorno quando l'app torna visibile / in primo piano
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     checkAndRefreshDate();
@@ -928,7 +929,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('userModal').style.display = 'none';
   });
 
-  // SALVATAGGIO CON VINCOLO DI AUTENTICAZIONE OBBLIGATORIA
+  // SALVATAGGIO CON RE-CIFRATURA AUTOMATICA PASTI SU CAMBIO PASSWORD
   document.getElementById('saveProfileBtn').addEventListener('click', async () => {
     const profiles = getProfiles();
     const isNew = document.getElementById('userNameGroup').style.display !== "none";
@@ -939,6 +940,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (!enteredName) return alert("Inserisci un nome utente valido.");
       targetName = enteredName;
     }
+
+    // 1. Recuperiamo i pasti correnti decifrandoli con la VECCHIA password PRIMA di sovrascrivere la sessione
+    const currentMeals = await getStoredMeals();
 
     const enteredPass = document.getElementById('profPassword').value.trim();
     const hasBio = !!localStorage.getItem(`bio_cred_${targetName.trim().toLowerCase()}`);
@@ -963,11 +967,19 @@ document.addEventListener('DOMContentLoaded', async () => {
       bioCred: localStorage.getItem(`bio_cred_${targetName.trim().toLowerCase()}`) || profiles[targetName]?.bioCred || ""
     };
 
+    // 2. Aggiorniamo la password nella sessione attiva
     sessionStorage.setItem(`unlocked_${targetName}`, "true");
     sessionStorage.setItem(`pass_${targetName}`, enteredPass);
 
     saveProfilesLocally(profiles);
     await saveProfilesToCloud(profiles);
+
+    // 3. Ri-cifriamo immediatamente i pasti esistenti con la NUOVA password sia in locale sia sul cloud
+    if (currentMeals && currentMeals.length > 0) {
+      await saveMeals(currentMeals);
+      await syncToGoogleSheets("syncAll", { meals: currentMeals });
+    }
+
     populateUserSelect();
     renderProfilesGrid();
     document.getElementById('userModal').style.display = 'none';
