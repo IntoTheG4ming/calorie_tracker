@@ -929,7 +929,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('userModal').style.display = 'none';
   });
 
-  // SALVATAGGIO CON RE-CIFRATURA AUTOMATICA PASTI SU CAMBIO PASSWORD
+  // SALVATAGGIO CON RE-CIFRATURA SICURA E PROTEZIONE ANTI-SOVRASCRITTURA
   document.getElementById('saveProfileBtn').addEventListener('click', async () => {
     const profiles = getProfiles();
     const isNew = document.getElementById('userNameGroup').style.display !== "none";
@@ -974,8 +974,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     saveProfilesLocally(profiles);
     await saveProfilesToCloud(profiles);
 
-    // 3. Ri-cifriamo immediatamente i pasti esistenti con la NUOVA password sia in locale sia sul cloud
-    if (currentMeals && currentMeals.length > 0) {
+    // 3. Ri-cifriamo e sincronizziamo I PASTI SOLO SE L'ELENCO NON È VUOTO (Protezione anti-sovrascrittura)
+    if (currentMeals && Array.isArray(currentMeals) && currentMeals.length > 0) {
       await saveMeals(currentMeals);
       await syncToGoogleSheets("syncAll", { meals: currentMeals });
     }
