@@ -1,10 +1,15 @@
-// --- CONFIGURAZIONE ENDPOINT E CHIAVE ---
-const HARDCODED_API_KEY = "AQ.Ab8RN6LAjkXuYeNXQAAGCXWsv-SdC4s5oUwDu3_yw5uSCt2vBQ";
+// --- CONFIGURAZIONE ENDPOINT (NESSUNA CHIAVE HARDCODED) ---
 const SHEETS_API_URL = "https://script.google.com/macros/s/AKfycbxnhbY1MlxA0G6HswEoievtKY-tfuZ7pgJIZCE0ER44HnYy9m_4yX1CevLwfdZbyCMp/exec";
 
 function getApiKey() {
   const params = new URLSearchParams(window.location.search);
-  return params.get('key') || HARDCODED_API_KEY;
+  const urlKey = params.get('key');
+  if (urlKey) return urlKey;
+
+  const localKey = localStorage.getItem('cal_gemini_api_key');
+  if (localKey && localKey.trim() !== '') return localKey.trim();
+
+  return "";
 }
 
 // --- MAPPA LIVELLI ATTIVITÀ FISICA ---
@@ -33,7 +38,8 @@ const FALLBACK_PROFILES = {
     weightKg: 71,
     activityLevel: "sedentary",
     password: "",
-    bioCred: ""
+    bioCred: "",
+    apiKeyEncrypted: ""
   }
 };
 
@@ -138,21 +144,21 @@ async function encryptData(dataObj, password, username) {
 }
 
 async function decryptData(cipherText, password, username) {
-  if (!cipherText) return [];
+  if (!cipherText) return null;
   try {
     let parsed;
     if (typeof cipherText === 'string') {
       try {
         parsed = JSON.parse(cipherText);
       } catch (e) {
-        return [];
+        return null;
       }
     } else {
       parsed = cipherText;
     }
 
     if (Array.isArray(parsed)) return parsed;
-    if (!parsed || !parsed.cipher || !parsed.iv) return parsed || [];
+    if (!parsed || !parsed.cipher || !parsed.iv) return parsed || null;
 
     const key = await deriveCryptoKey(password, username);
     const decrypted = await window.crypto.subtle.decrypt(
@@ -164,7 +170,7 @@ async function decryptData(cipherText, password, username) {
     return JSON.parse(dec.decode(decrypted));
   } catch (err) {
     console.warn("Impossibile decifrare i dati:", err);
-    return [];
+    return null;
   }
 }
 
@@ -177,7 +183,7 @@ function calculateMetricsFor(profile) {
   return { bmr: Math.round(bmr), tdee };
 }
 
-// --- SUPPORTO ED ESECUZIONE WEBAUTHN (BIOMETRIA PERMANENTE + CLOUD SYNC) ---
+// --- SUPPORTO ED ESECUZIONE WEBAUTHN ---
 async function isBiometricSupported() {
   return window.PublicKeyCredential &&
          typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function' &&
@@ -307,13 +313,27 @@ async function getStoredMeals() {
   const rawData = localStorage.getItem(getStoredMealsKey());
   if (!rawData) return [];
   const pass = getUserSessionPassword(activeUser);
-  return await decryptData(rawData, pass, activeUser);
+  const dec = await decryptData(rawData, pass, activeUser);
+  return Array.isArray(dec) ? dec : [];
 }
 
 async function saveMeals(meals) {
   const pass = getUserSessionPassword(activeUser);
   const encryptedPayload = await encryptData(meals, pass, activeUser);
   localStorage.setItem(getStoredMealsKey(), encryptedPayload);
+}
+
+// --- RIPRISTINO CHIAVE API DA PROFILE CLOUD CIFRATO ---
+async function tryRestoreApiKeyFromProfile(username) {
+  const profiles = getProfiles();
+  const p = profiles[username];
+  if (p && p.apiKeyEncrypted) {
+    const pass = getUserSessionPassword(username);
+    const decryptedKey = await decryptData(p.apiKeyEncrypted, pass, username);
+    if (decryptedKey && typeof decryptedKey === 'string' && decryptedKey.trim() !== '') {
+      localStorage.setItem('cal_gemini_api_key', decryptedKey.trim());
+    }
+  }
 }
 
 // --- SINCRONIZZAZIONE PROFILI E BIOMETRIA (CLOUD) ---
@@ -379,8 +399,9 @@ async function syncFromGoogleSheets() {
       let mealsToSave = [];
 
       if (result.data.length > 0 && result.data[0].encryptedBlob) {
-        mealsToSave = await decryptData(result.data[0].encryptedBlob, pass, activeUser);
-      } else {
+        const dec = await decryptData(result.data[0].encryptedBlob, pass, activeUser);
+        mealsToSave = Array.isArray(dec) ? dec : [];
+      } else if (Array.isArray(result.data)) {
         mealsToSave = result.data;
       }
 
@@ -600,12 +621,13 @@ async function selectProfileFromLanding(targetUser) {
 
   const unlocked = await requestUserSwitch(targetUser);
   if (unlocked) {
-    onAuthenticationSuccess();
+    await onAuthenticationSuccess();
   }
 }
 
 async function onAuthenticationSuccess() {
   document.getElementById('landingScreen').style.display = 'none';
+  await tryRestoreApiKeyFromProfile(activeUser);
   await renderDashboard();
   syncFromGoogleSheets();
 }
@@ -613,6 +635,10 @@ async function onAuthenticationSuccess() {
 // --- ESECUZIONE API GEMINI CON FALLBACK AUTOMATICO ---
 async function callGeminiSingleModel(modelName, inputText, nextSnackLabel) {
   const apiKey = getApiKey();
+  if (!apiKey) {
+    throw new Error("MISSING_API_KEY");
+  }
+
   const systemInstruction = `Sei un nutrizionista esperto. Analizza la descrizione del pasto fornita in italiano e restituisci ESCLUSIVAMENTE un JSON strutturato con le stime nutrizionali.
 Se il pasto descritto è un generico snack/merenda/spuntino, imposta "mealType" con il valore "${nextSnackLabel}".
 Se è Colazione, Pranzo o Cena, usa rispettivamente "Colazione", "Pranzo", "Cena".
@@ -655,6 +681,8 @@ async function analyzeMealWithGemini(inputText) {
   try {
     return await callGeminiSingleModel(primaryModel, inputText, nextSnackLabel);
   } catch (primaryErr) {
+    if (primaryErr.message === "MISSING_API_KEY") throw primaryErr;
+
     console.warn(`Modello primario (${primaryModel}) fallito:`, primaryErr);
     
     const statusEl = document.getElementById('inputStatus');
@@ -666,9 +694,14 @@ async function analyzeMealWithGemini(inputText) {
     try {
       return await callGeminiSingleModel(fallbackModel, inputText, nextSnackLabel);
     } catch (fallbackErr) {
+      if (fallbackErr.message === "MISSING_API_KEY") throw fallbackErr;
       throw new Error(`Entrambi i modelli (${primaryModel} e ${fallbackModel}) non hanno risposto: ${fallbackErr.message}`);
     }
   }
+}
+
+function showMissingKeyWarning() {
+  document.getElementById('missingKeyModal').style.display = 'flex';
 }
 
 // --- AGGIUNTA PASTO ---
@@ -679,6 +712,13 @@ async function handleMealSubmission(text) {
     return;
   }
   if (!text || text.trim() === '') return;
+
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    showMissingKeyWarning();
+    return;
+  }
+
   const statusEl = document.getElementById('inputStatus');
   statusEl.innerText = `Analisi per ${activeUser}...`;
   statusEl.style.color = "var(--accent)";
@@ -708,6 +748,11 @@ async function handleMealSubmission(text) {
     document.getElementById('mealTextInput').value = '';
     setTimeout(() => { statusEl.innerText = ""; }, 3000);
   } catch (err) {
+    if (err.message === "MISSING_API_KEY") {
+      statusEl.innerText = "";
+      showMissingKeyWarning();
+      return;
+    }
     console.error(err);
     statusEl.innerText = "Errore: " + err.message;
     statusEl.style.color = "var(--danger)";
@@ -849,7 +894,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     userSelect.value = activeUser;
     const unlocked = await requestUserSwitch(targetUser);
     if (unlocked) {
-      onAuthenticationSuccess();
+      await onAuthenticationSuccess();
     }
   });
 
@@ -875,14 +920,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('unlockModal').style.display = 'none';
       switchUser(pendingUserSwitch);
       pendingUserSwitch = null;
-      onAuthenticationSuccess();
+      await onAuthenticationSuccess();
     } else {
       errorEl.innerText = "Riconoscimento biometrico annullato o fallito.";
       errorEl.style.color = "var(--danger)";
     }
   });
 
-  document.getElementById('confirmUnlockBtn').addEventListener('click', () => {
+  document.getElementById('confirmUnlockBtn').addEventListener('click', async () => {
     if (!pendingUserSwitch) return;
     const profiles = getProfiles();
     const profile = profiles[pendingUserSwitch];
@@ -894,7 +939,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('unlockModal').style.display = 'none';
       switchUser(pendingUserSwitch);
       pendingUserSwitch = null;
-      onAuthenticationSuccess();
+      await onAuthenticationSuccess();
     } else {
       document.getElementById('unlockError').innerText = "Password errata. Riprova.";
       document.getElementById('unlockError').style.color = "var(--danger)";
@@ -929,7 +974,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('userModal').style.display = 'none';
   });
 
-  // SALVATAGGIO CON RE-CIFRATURA SICURA E PROTEZIONE ANTI-SOVRASCRITTURA
+  // SALVATAGGIO PROFILO
   document.getElementById('saveProfileBtn').addEventListener('click', async () => {
     const profiles = getProfiles();
     const isNew = document.getElementById('userNameGroup').style.display !== "none";
@@ -941,20 +986,24 @@ document.addEventListener('DOMContentLoaded', async () => {
       targetName = enteredName;
     }
 
-    // 1. Recuperiamo i pasti correnti decifrandoli con la VECCHIA password PRIMA di sovrascrivere la sessione
     const currentMeals = await getStoredMeals();
-
     const enteredPass = document.getElementById('profPassword').value.trim();
     const hasBio = !!localStorage.getItem(`bio_cred_${targetName.trim().toLowerCase()}`);
 
     if (!enteredPass && !hasBio) {
-      alert("⚠️ Per salvare il profilo è OBBLIGATORIO impostare almeno un metodo di autenticazione:\n\n1. Inserisci una Password\nOPPURE\n2. Registra la Biometria con il pulsante dedicato.");
+      alert("⚠️ Per salvare il profilo è OBBLIGATORIO impostare almeno un metodo di autenticazione:\n\n1. Inserisci una Password\nOPPUR\n2. Registra la Biometria con il pulsante dedicato.");
       return;
     }
 
     if (isNew) {
       activeUser = targetName;
       localStorage.setItem('cal_active_user', activeUser);
+    }
+
+    const localApiKey = getApiKey();
+    let encryptedKey = profiles[targetName]?.apiKeyEncrypted || "";
+    if (localApiKey) {
+      encryptedKey = await encryptData(localApiKey, enteredPass || `bio_protected_${targetName.trim().toLowerCase()}`, targetName);
     }
 
     profiles[targetName] = {
@@ -964,17 +1013,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       weightKg: Number(document.getElementById('profWeight').value) || 70,
       activityLevel: document.getElementById('profActivityLevel').value,
       password: enteredPass,
-      bioCred: localStorage.getItem(`bio_cred_${targetName.trim().toLowerCase()}`) || profiles[targetName]?.bioCred || ""
+      bioCred: localStorage.getItem(`bio_cred_${targetName.trim().toLowerCase()}`) || profiles[targetName]?.bioCred || "",
+      apiKeyEncrypted: encryptedKey
     };
 
-    // 2. Aggiorniamo la password nella sessione attiva
     sessionStorage.setItem(`unlocked_${targetName}`, "true");
     sessionStorage.setItem(`pass_${targetName}`, enteredPass);
 
     saveProfilesLocally(profiles);
     await saveProfilesToCloud(profiles);
 
-    // 3. Ri-cifriamo e sincronizziamo I PASTI SOLO SE L'ELENCO NON È VUOTO (Protezione anti-sovrascrittura)
     if (currentMeals && Array.isArray(currentMeals) && currentMeals.length > 0) {
       await saveMeals(currentMeals);
       await syncToGoogleSheets("syncAll", { meals: currentMeals });
@@ -984,21 +1032,44 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderProfilesGrid();
     document.getElementById('userModal').style.display = 'none';
 
-    onAuthenticationSuccess();
+    await onAuthenticationSuccess();
   });
 
+  // GESTIONE MODAL AI & CHIAVE API
   document.getElementById('openAiModalBtn').addEventListener('click', () => {
+    document.getElementById('apiKeyInput').value = getApiKey();
     document.getElementById('primaryModelSelect').value = localStorage.getItem('cal_primary_model') || "gemini-3.6-flash";
     document.getElementById('fallbackModelSelect').value = localStorage.getItem('cal_fallback_model') || "gemini-3.1-flash-lite";
     document.getElementById('aiModal').style.display = "flex";
   });
 
-  document.getElementById('closeAiModalBtn').addEventListener('click', () => {
+  document.getElementById('closeAiModalBtn').addEventListener('click', async () => {
+    const keyVal = document.getElementById('apiKeyInput').value.trim();
+    if (keyVal) {
+      localStorage.setItem('cal_gemini_api_key', keyVal);
+      
+      const profiles = getProfiles();
+      if (profiles[activeUser]) {
+        const pass = getUserSessionPassword(activeUser);
+        profiles[activeUser].apiKeyEncrypted = await encryptData(keyVal, pass, activeUser);
+        saveProfilesLocally(profiles);
+        await saveProfilesToCloud(profiles);
+      }
+    } else {
+      localStorage.removeItem('cal_gemini_api_key');
+    }
+
     const primary = document.getElementById('primaryModelSelect').value;
     const fallback = document.getElementById('fallbackModelSelect').value;
     localStorage.setItem('cal_primary_model', primary);
     localStorage.setItem('cal_fallback_model', fallback);
+
     document.getElementById('aiModal').style.display = "none";
+  });
+
+  document.getElementById('openAiConfigFromWarningBtn').addEventListener('click', () => {
+    document.getElementById('missingKeyModal').style.display = 'none';
+    document.getElementById('openAiModalBtn').click();
   });
 
   const datePicker = document.getElementById('datePicker');
@@ -1037,6 +1108,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (!isUserUnlocked(activeUser)) {
         alert("Devi prima sbloccare il profilo!");
         requestUserSwitch(activeUser);
+        return;
+      }
+      if (!getApiKey()) {
+        showMissingKeyWarning();
         return;
       }
       try {

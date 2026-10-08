@@ -208,6 +208,22 @@
       background: var(--danger) !important;
       color: #ffffff !important;
     }
+    .btn-link {
+      display: inline-block;
+      background: #334155;
+      color: #38bdf8;
+      text-decoration: none;
+      padding: 0.5rem 0.8rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-align: center;
+      margin-top: 4px;
+      border: 1px solid var(--border);
+    }
+    .btn-link:hover {
+      background: #475569;
+    }
   </style>
 </head>
 <body>
@@ -224,7 +240,7 @@
   <header>
     <div>
       <h1>Calorie Tracker</h1>
-      <span class="badge">v1.9.5</span>
+      <span class="badge">v1.9.7</span>
     </div>
     <div class="header-actions">
       <button id="openAiModalBtn" class="btn-icon" title="Impostazioni Modelli AI">🤖 Modelli AI</button>
@@ -365,11 +381,20 @@
     </div>
   </div>
 
-  <!-- Modal Configurazione Modelli AI -->
+  <!-- Modal Configurazione Modelli AI & Chiave API -->
   <div id="aiModal" class="modal">
     <div class="modal-content">
-      <h2>Configurazione Modelli AI</h2>
+      <h2>Configurazione AI & Chiave API</h2>
+      
       <div class="form-group">
+        <label>Chiave API Google Gemini</label>
+        <input type="password" id="apiKeyInput" placeholder="Incolla la tua chiave API (AIzaSy...)">
+        <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" class="btn-link">
+          🔑 Ottieni Chiave API GRATIS su Google AI Studio ➔
+        </a>
+      </div>
+
+      <div class="form-group" style="margin-top: 12px;">
         <label>Modello Primario</label>
         <select id="primaryModelSelect">
           <option value="gemini-3.6-flash">Gemini 3.6 Flash (Consigliato)</option>
@@ -378,6 +403,7 @@
           <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
         </select>
       </div>
+
       <div class="form-group">
         <label>Modello di Fallback (Backup automatico)</label>
         <select id="fallbackModelSelect">
@@ -386,11 +412,31 @@
           <option value="gemini-3.6-flash">Gemini 3.6 Flash</option>
         </select>
       </div>
+
       <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
-        Se il modello primario supera la quota o non risponde, l'app passa automaticamente al modello di fallback.
+        La tua chiave API viene memorizzata in modo privato e cifrato nel tuo account personalizzato.
       </div>
+
       <div class="modal-actions">
         <button id="closeAiModalBtn" style="background:var(--accent); color:#0f172a; font-weight:bold;">Salva e Chiudi</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Avviso Manca Chiave API (Bloccante) -->
+  <div id="missingKeyModal" class="modal">
+    <div class="modal-content" style="border: 1px solid #f59e0b;">
+      <h2 style="color: #f59e0b;">⚠️ Chiave API Richiesta</h2>
+      <p style="font-size: 0.9rem; color: #cbd5e1; line-height: 1.4; margin-bottom: 1rem;">
+        Senza la tua **Chiave API di Google Gemini**, il servizio di analisi nutrizionale con Intelligenza Artificiale <strong>non può funzionare</strong>.
+      </p>
+      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.2rem;">
+        Generarne una è completamente <strong>gratuito</strong> e richiede meno di un minuto su Google AI Studio.
+      </p>
+      <div class="modal-actions">
+        <button id="openAiConfigFromWarningBtn" style="background:var(--accent); color:#0f172a; font-weight:bold; width: 100%; padding: 0.75rem;">
+          ⚙️ Configura Chiave API Ora
+        </button>
       </div>
     </div>
   </div>
