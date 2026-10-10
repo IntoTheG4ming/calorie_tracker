@@ -652,6 +652,26 @@ function renderMacroProgress(targets, consumed) {
   });
 }
 
+// --- MIGRAZIONE PASTI VECCHI (fibre e grassi saturi) ---
+async function migrateTodayMeals() {
+  const meals = await getStoredMeals();
+  let changed = false;
+  for (const m of meals) {
+    if (m.fiber === undefined) {
+      m.fiber = 0;
+      changed = true;
+    }
+    if (m.saturatedFat === undefined) {
+      m.saturatedFat = 0;
+      changed = true;
+    }
+  }
+  if (changed) {
+    await saveMeals(meals);
+    syncToGoogleSheets("syncAll", { meals: meals });
+  }
+}
+
 async function deleteMeal(id) {
   if (!isUserUnlocked(activeUser)) return;
   let meals = await getStoredMeals();
@@ -1373,4 +1393,5 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('cancelEditMealBtn').addEventListener('click', closeEditMealModal);
 
   await syncProfilesFromCloud();
+await migrateTodayMeals();
 });
