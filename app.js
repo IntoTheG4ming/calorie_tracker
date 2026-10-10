@@ -183,6 +183,50 @@ function calculateMetricsFor(profile) {
   return { bmr: Math.round(bmr), tdee };
 }
 
+// --- CALCOLO TARGET MACRONUTRIENTI ADATTATI AL PROFILO UTENTE ---
+// Formule basate su linee guida WHO/EFSA, adattate a età/peso/sesso/altezza/attività.
+function calculateMacroTargets(profile) {
+  if (!profile) return { protein: 100, carbs: 250, fat: 70, fiber: 25, saturatedFat: 15 };
+  const { tdee } = calculateMetricsFor(profile);
+  const weight = profile.weightKg || 70;
+
+  // Proteine: 1.8 g/kg peso (range 1.6-2.2 g/kg)
+  const proteinTarget = Math.round(weight * 1.8);
+
+  // Carboidrati: 50% del TDEE (4 kcal/g)
+  const carbsTarget = Math.round((tdee * 0.50) / 4);
+
+  // Grassi: 30% del TDEE (9 kcal/g)
+  const fatTarget = Math.round((tdee * 0.30) / 9);
+
+  // Fibre: 14g per 1000 kcal di TDEE (linea guida WHO)
+  const fiberTarget = Math.round((tdee / 1000) * 14);
+
+  // Grassi saturi: < 10% del TDEE da grassi saturi (9 kcal/g)
+  const saturatedFatTarget = Math.round((tdee * 0.10) / 9);
+
+  return {
+    protein: proteinTarget,
+    carbs: carbsTarget,
+    fat: fatTarget,
+    fiber: fiberTarget,
+    saturatedFat: saturatedFatTarget
+  };
+}
+
+// Restituisce i target effettivi: se il profilo ha valori personalizzati, usali, altrimenti calcolati
+function getMacroTargets(profile) {
+  if (!profile) return calculateMacroTargets(null);
+  const calc = calculateMacroTargets(profile);
+  return {
+    protein: profile.proteinTarget != null ? Number(profile.proteinTarget) : calc.protein,
+    carbs: profile.carbsTarget != null ? Number(profile.carbsTarget) : calc.carbs,
+    fat: profile.fatTarget != null ? Number(profile.fatTarget) : calc.fat,
+    fiber: profile.fiberTarget != null ? Number(profile.fiberTarget) : calc.fiber,
+    saturatedFat: profile.saturatedFatTarget != null ? Number(profile.saturatedFatTarget) : calc.saturatedFat
+  };
+}
+
 // --- SUPPORTO ED ESECUZIONE WEBAUTHN ---
 async function isBiometricSupported() {
   return window.PublicKeyCredential &&
@@ -460,12 +504,14 @@ async function renderDashboard() {
   const allMeals = await getStoredMeals();
   const dayMeals = allMeals.filter(m => m.date === currentDate);
 
-  let totalCal = 0, totalP = 0, totalC = 0, totalF = 0;
+  let totalCal = 0, totalP = 0, totalC = 0, totalF = 0, totalFi = 0, totalSF = 0;
   dayMeals.forEach(m => {
     totalCal += m.calories || 0;
     totalP += m.protein || 0;
     totalC += m.carbs || 0;
     totalF += m.fat || 0;
+    totalFi += m.fiber || 0;
+    totalSF += m.saturatedFat || 0;
   });
 
   document.getElementById('totalCalories').innerText = totalCal;
@@ -490,6 +536,17 @@ async function renderDashboard() {
     bmrMarker.style.left = pctBmr + "%";
   }
 
+  // --- CIRCLE PROGRESS PER MACRONUTRIENTI ---
+  const macroTargets = getMacroTargets(profile);
+  const macroConsumed = {
+    protein: totalP,
+    carbs: totalC,
+    fat: totalF,
+    fiber: totalFi,
+    saturatedFat: totalSF
+  };
+  renderMacroProgress(macroTargets, macroConsumed);
+
   const listContainer = document.getElementById('mealsList');
   listContainer.innerHTML = '';
 
@@ -502,19 +559,96 @@ async function renderDashboard() {
     const mealCard = document.createElement('div');
     mealCard.className = 'meal-card';
     const mealPct = ((meal.calories / tdee) * 100).toFixed(1);
+    const gramsDisplay = meal.grams != null && meal.grams > 0 ? ` • ${meal.grams}g` : '';
+    const macrosDisplay = `P: ${meal.protein}g | C: ${meal.carbs}g | G: ${meal.fat}g | Fibre: ${meal.fiber || 0}g | Gr.Sat: ${meal.saturatedFat || 0}g`;
 
     mealCard.innerHTML = `
       <div class="meal-info">
         <span class="meal-type">${meal.type || 'Pasto'} • ${mealPct}% TDEE</span>
-        <span class="meal-name">${meal.name}</span>
-        <span class="meal-macros">P: ${meal.protein}g | C: ${meal.carbs}g | G: ${meal.fat}g</span>
+        <span class="meal-name">${meal.name}${gramsDisplay}</span>
+        <span class="meal-macros">${macrosDisplay}</span>
       </div>
-      <div style="display:flex; align-items:center; gap: 12px;">
+      <div style="display:flex; align-items:center; gap: 8px;">
         <span class="meal-calories">${meal.calories} kcal</span>
+        <button class="edit-btn" onclick="editMeal('${meal.id}')" title="Modifica pasto" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:1rem;">✎</button>
         <button class="delete-btn" onclick="deleteMeal('${meal.id}')" title="Elimina pasto">✕</button>
       </div>
     `;
     listContainer.appendChild(mealCard);
+  });
+}
+
+// --- CIRCLE PROGRESS PER MACRONUTRIENTI ---
+function renderMacroProgress(targets, consumed) {
+  const container = document.getElementById('macroProgressContainer');
+  if (!container) return;
+
+  const macros = [
+    { key: 'protein', label: 'Proteine', color: '#60a5fa', consumed: consumed.protein, target: targets.protein },
+    { key: 'carbs', label: 'Carboidrati', color: '#facc15', consumed: consumed.carbs, target: targets.carbs },
+    { key: 'fat', label: 'Grassi', color: '#f87171', consumed: consumed.fat, target: targets.fat },
+    { key: 'fiber', label: 'Fibre', color: '#fb923c', consumed: consumed.fiber, target: targets.fiber },
+    { key: 'saturatedFat', label: 'Grassi Sat.', color: '#c084fc', consumed: consumed.saturatedFat, target: targets.saturatedFat }
+  ];
+
+  container.innerHTML = '';
+
+  macros.forEach(macro => {
+    const pct = macro.target > 0 ? Math.min(Math.round((macro.consumed / macro.target) * 100), 100) : 0;
+    const circle = document.createElement('div');
+    circle.className = 'macro-circle';
+    circle.style.display = 'flex';
+    circle.style.flexDirection = 'column';
+    circle.style.alignItems = 'center';
+    circle.style.gap = '4px';
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', '56');
+    svg.setAttribute('height', '56');
+    svg.setAttribute('viewBox', '0 0 56 56');
+
+    const circumference = 2 * Math.PI * 26;
+    const offset = circumference - (pct / 100) * circumference;
+
+    const bgCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    bgCircle.setAttribute('cx', '28');
+    bgCircle.setAttribute('cy', '28');
+    bgCircle.setAttribute('r', '26');
+    bgCircle.setAttribute('fill', 'none');
+    bgCircle.setAttribute('stroke', '#334155');
+    bgCircle.setAttribute('stroke-width', '6');
+
+    const progressCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    progressCircle.setAttribute('cx', '28');
+    progressCircle.setAttribute('cy', '28');
+    progressCircle.setAttribute('r', '26');
+    progressCircle.setAttribute('fill', 'none');
+    progressCircle.setAttribute('stroke', macro.color);
+    progressCircle.setAttribute('stroke-width', '6');
+    progressCircle.setAttribute('stroke-linecap', 'round');
+    progressCircle.setAttribute('transform', 'rotate(-90 28 28)');
+    progressCircle.setAttribute('stroke-dasharray', circumference);
+    progressCircle.setAttribute('stroke-dashoffset', offset);
+    progressCircle.style.transition = 'stroke-dashoffset 0.5s ease';
+
+    svg.appendChild(bgCircle);
+    svg.appendChild(progressCircle);
+
+    const label = document.createElement('span');
+    label.style.fontSize = '0.7rem';
+    label.style.color = 'var(--text-muted)';
+    label.textContent = macro.label;
+
+    const value = document.createElement('span');
+    value.style.fontSize = '0.75rem';
+    value.style.fontWeight = '600';
+    value.style.color = macro.color;
+    value.textContent = pct + '%';
+
+    circle.appendChild(svg);
+    circle.appendChild(label);
+    circle.appendChild(value);
+    container.appendChild(circle);
   });
 }
 
@@ -525,6 +659,88 @@ async function deleteMeal(id) {
   await saveMeals(meals);
   await renderDashboard();
   syncToGoogleSheets("syncAll", { meals: meals });
+}
+
+// --- MODIFICA PASTO (Opzione 1: ritocco testo + ricalcolo Gemini) ---
+let editingMealId = null;
+
+function openEditMealModal(meal) {
+  editingMealId = meal.id;
+  document.getElementById('editMealModalTitle').innerText = `Modifica Pasto: ${meal.type || 'Pasto'}`;
+  document.getElementById('editMealTextInput').value = meal.name || '';
+  document.getElementById('editMealStatus').innerText = '';
+  document.getElementById('editMealModal').style.display = 'flex';
+}
+
+async function editMeal(id) {
+  if (!isUserUnlocked(activeUser)) return;
+  const meals = await getStoredMeals();
+  const meal = meals.find(m => m.id === id);
+  if (!meal) return;
+  openEditMealModal(meal);
+}
+
+async function confirmEditMeal() {
+  if (!editingMealId) return;
+  const newText = document.getElementById('editMealTextInput').value.trim();
+  if (!newText) {
+    document.getElementById('editMealStatus').innerText = "Inserisci una descrizione del pasto.";
+    document.getElementById('editMealStatus').style.color = "var(--danger)";
+    return;
+  }
+
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    showMissingKeyWarning();
+    return;
+  }
+
+  const statusEl = document.getElementById('editMealStatus');
+  statusEl.innerText = "Ricalcolo nutrizionale in corso...";
+  statusEl.style.color = "var(--accent)";
+
+  try {
+    const result = await analyzeMealWithGemini(newText);
+    const meals = await getStoredMeals();
+    const idx = meals.findIndex(m => m.id === editingMealId);
+    if (idx === -1) return;
+
+    meals[idx] = {
+      ...meals[idx],
+      type: result.mealType || meals[idx].type,
+      name: result.mealDescription || newText,
+      calories: Math.round(result.calories) || 0,
+      protein: Math.round(result.protein) || 0,
+      carbs: Math.round(result.carbs) || 0,
+      fat: Math.round(result.fat) || 0,
+      fiber: Math.round(result.fiber) || 0,
+      saturatedFat: Math.round(result.saturatedFat) || 0,
+      grams: result.grams != null ? Math.round(result.grams) : null
+    };
+
+    await saveMeals(meals);
+    await renderDashboard();
+    syncToGoogleSheets("syncAll", { meals: meals });
+
+    statusEl.innerText = "Pasto modificato con successo!";
+    statusEl.style.color = "var(--accent)";
+    document.getElementById('editMealModal').style.display = 'none';
+    editingMealId = null;
+    setTimeout(() => { statusEl.innerText = ""; }, 3000);
+  } catch (err) {
+    if (err.message === "MISSING_API_KEY") {
+      showMissingKeyWarning();
+      return;
+    }
+    console.error(err);
+    statusEl.innerText = "Errore: " + err.message;
+    statusEl.style.color = "var(--danger)";
+  }
+}
+
+function closeEditMealModal() {
+  document.getElementById('editMealModal').style.display = 'none';
+  editingMealId = null;
 }
 
 // --- MASCHERAMENTO DASHBOARD IN CASO DI BLOCCO ---
@@ -649,7 +865,10 @@ Schema JSON richiesto:
   "calories": number,
   "protein": number,
   "carbs": number,
-  "fat": number
+  "fat": number,
+  "fiber": number,
+  "saturatedFat": number,
+  "grams": number
 }`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
@@ -734,7 +953,10 @@ async function handleMealSubmission(text) {
       calories: Math.round(result.calories) || 0,
       protein: Math.round(result.protein) || 0,
       carbs: Math.round(result.carbs) || 0,
-      fat: Math.round(result.fat) || 0
+      fat: Math.round(result.fat) || 0,
+      fiber: Math.round(result.fiber) || 0,
+      saturatedFat: Math.round(result.saturatedFat) || 0,
+      grams: result.grams != null ? Math.round(result.grams) : null
     };
 
     const meals = await getStoredMeals();
@@ -1145,6 +1367,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   } else {
     voiceBtn.style.display = 'none';
   }
+
+  // EVENT LISTENER MODAL MODIFICA PASTO
+  document.getElementById('confirmEditMealBtn').addEventListener('click', confirmEditMeal);
+  document.getElementById('cancelEditMealBtn').addEventListener('click', closeEditMealModal);
 
   await syncProfilesFromCloud();
 });
