@@ -1,4 +1,4 @@
-# 🥗 Voice Calorie Tracker PWA
+# 🥗 Voice Calorie Tracker PWA - v1.9.8
 
 ![PWA Ready](https://img.shields.io/badge/PWA-Ready-10b981?style=flat-square&logo=pwa)
 ![Gemini AI](https://img.shields.io/badge/AI-Gemini%20Flash-8e44ad?style=flat-square&logo=google)
