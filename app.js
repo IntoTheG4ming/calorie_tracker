@@ -12,6 +12,15 @@ function getApiKey() {
   return "";
 }
 
+// --- HASH PASSWORD SHA-256 (async) ---
+async function hashPassword(raw) {
+  const enc = new TextEncoder();
+  const hashBuffer = await crypto.subtle.digest('SHA-256', enc.encode(raw));
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  return hashHex;
+}
+
 // --- MAPPA LIVELLI ATTIVITÀ FISICA ---
 const ACTIVITY_MULTIPLIERS = {
   sedentary: 1.2,
@@ -1175,16 +1184,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     const profile = profiles[pendingUserSwitch];
     const enteredPass = document.getElementById('unlockPasswordInput').value.trim();
 
-    if (profile && profile.password && profile.password === enteredPass) {
+    if (profile && profile.password) {
+      const hashedInput = await hashPassword(enteredPass);
+      if (hashedInput === profile.password) {
+        sessionStorage.setItem(`unlocked_${pendingUserSwitch}`, "true");
+        sessionStorage.setItem(`pass_${pendingUserSwitch}`, enteredPass);
+        document.getElementById('unlockModal').style.display = 'none';
+        switchUser(pendingUserSwitch);
+        pendingUserSwitch = null;
+        await onAuthenticationSuccess();
+      } else {
+        document.getElementById('unlockError').innerText = "Password errata. Riprova.";
+        document.getElementById('unlockError').style.color = "var(--danger)";
+      }
+    } else {
+      // No password set, rely on biometrics only
       sessionStorage.setItem(`unlocked_${pendingUserSwitch}`, "true");
-      sessionStorage.setItem(`pass_${pendingUserSwitch}`, enteredPass);
+      sessionStorage.setItem(`pass_${pendingUserSwitch}`, "");
       document.getElementById('unlockModal').style.display = 'none';
       switchUser(pendingUserSwitch);
       pendingUserSwitch = null;
       await onAuthenticationSuccess();
-    } else {
-      document.getElementById('unlockError').innerText = "Password errata. Riprova.";
-      document.getElementById('unlockError').style.color = "var(--danger)";
     }
   });
 
@@ -1254,7 +1274,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       heightCm: Number(document.getElementById('profHeight').value) || 170,
       weightKg: Number(document.getElementById('profWeight').value) || 70,
       activityLevel: document.getElementById('profActivityLevel').value,
-      password: enteredPass,
+      password: await hashPassword(enteredPass),
       bioCred: localStorage.getItem(`bio_cred_${targetName.trim().toLowerCase()}`) || profiles[targetName]?.bioCred || "",
       apiKeyEncrypted: encryptedKey
     };
